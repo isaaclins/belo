@@ -32,9 +32,16 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function RecentCard({ project }: { project: ProjectSummary }) {
+function RecentCard({
+  project,
+  onDelete,
+}: {
+  project: ProjectSummary;
+  onDelete: (project: ProjectSummary) => void;
+}) {
   const openProject = useStore((s) => s.openProject);
-  const forgetProject = useStore((s) => s.forgetProject);
+  const openPath = useStore((s) => s.path);
+  const isOpen = openPath === project.path;
 
   return (
     <li className="recent">
@@ -50,9 +57,10 @@ function RecentCard({ project }: { project: ProjectSummary }) {
         <span className="eyebrow">{relativeTime(project.updatedAt)}</span>
         <button
           className="iconbtn iconbtn--danger"
-          title="Remove from this list"
-          aria-label={`Remove ${project.name} from the recent list`}
-          onClick={() => void forgetProject(project.path)}
+          title={isOpen ? "This project is open" : "Delete this project"}
+          aria-label={`Delete the project ${project.name}`}
+          disabled={isOpen}
+          onClick={() => onDelete(project)}
         >
           <Trash size={16} weight="bold" />
         </button>
@@ -66,9 +74,12 @@ export function HomeView() {
   const projectsDir = useStore((s) => s.projectsDir);
   const createProject = useStore((s) => s.createProject);
   const openProjectDialog = useStore((s) => s.openProjectDialog);
+  const deleteProject = useStore((s) => s.deleteProject);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   const [mode, setMode] = useState<ProjectMode>("single");
+  const [doomed, setDoomed] = useState<ProjectSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const submit = () => {
     setNaming(false);
@@ -129,7 +140,7 @@ export function HomeView() {
         ) : (
           <ul className="home__list">
             {recents.map((project) => (
-              <RecentCard key={project.path} project={project} />
+              <RecentCard key={project.path} project={project} onDelete={setDoomed} />
             ))}
           </ul>
         )}
@@ -189,6 +200,43 @@ export function HomeView() {
               ))}
             </div>
             <span className="field__hint">This is fixed once the project exists.</span>
+          </div>
+        </Modal>
+      ) : null}
+
+      {doomed ? (
+        <Modal
+          title={`Delete ${doomed.name}?`}
+          onClose={() => (deleting ? undefined : setDoomed(null))}
+          footer={
+            <>
+              <button className="btn" disabled={deleting} onClick={() => setDoomed(null)}>
+                Keep it
+              </button>
+              <button
+                className="btn btn--danger"
+                disabled={deleting}
+                onClick={async () => {
+                  setDeleting(true);
+                  await deleteProject(doomed.path);
+                  setDeleting(false);
+                  setDoomed(null);
+                }}
+              >
+                <Trash size={16} weight="bold" /> {deleting ? "Deleting" : "Delete forever"}
+              </button>
+            </>
+          }
+        >
+          <div className="stack">
+            <p className="danger-note">
+              <strong>{doomed.name}</strong> and everything inside it goes for good:{" "}
+              {doomed.imageCount} image{doomed.imageCount === 1 ? "" : "s"}, {doomed.labelCount}{" "}
+              label{doomed.labelCount === 1 ? "" : "s"}
+              {doomed.trained ? " and the trained model" : ""}. This cannot be undone and there is
+              no trash to fish it out of.
+            </p>
+            <p className="field__hint mono">{doomed.path}</p>
           </div>
         </Modal>
       ) : null}

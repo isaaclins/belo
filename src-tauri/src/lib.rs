@@ -408,6 +408,23 @@ fn forget_project(app: tauri::AppHandle, path: String) -> Res<()> {
     fs::write(file, text).map_err(|e| fail("could not save recent projects", e))
 }
 
+/// Erases a project bundle. This is the only recursive delete in the app, so it
+/// refuses anything that is not a real .belo directory holding a manifest: no
+/// files, no symlinks, no plain folders that merely carry the extension.
+#[tauri::command]
+fn delete_project(app: tauri::AppHandle, path: String) -> Res<()> {
+    let root = bundle_root(&path)?;
+    let meta = fs::symlink_metadata(&root).map_err(|e| fail("no such project", e))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(format!("not a project directory: {path}"));
+    }
+    if !root.join(MANIFEST).is_file() {
+        return Err(format!("not a .belo project, no {MANIFEST}: {path}"));
+    }
+    fs::remove_dir_all(&root).map_err(|e| fail("could not delete the project", e))?;
+    forget_project(app, path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -432,7 +449,8 @@ pub fn run() {
             scan_projects,
             recent_projects,
             remember_project,
-            forget_project
+            forget_project,
+            delete_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running Belo");

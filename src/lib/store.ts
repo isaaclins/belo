@@ -140,6 +140,8 @@ interface State {
   openProjectDialog: () => Promise<void>;
   closeProject: () => void;
   forgetProject: (path: string) => Promise<void>;
+  /** Erases a .belo bundle from disk and drops it from the list. */
+  deleteProject: (path: string) => Promise<void>;
   renameProject: (name: string) => void;
   saveNow: () => Promise<void>;
 
@@ -710,6 +712,20 @@ export const useStore = create<State>((set, get) => {
     async forgetProject(path) {
       await storage.forgetProject(path);
       await get().refreshRecents();
+    },
+
+    async deleteProject(path) {
+      if (get().path === path) {
+        get().toast("Close the project before deleting it", "bad");
+        return;
+      }
+      try {
+        await storage.deleteProject(path);
+        await get().refreshRecents();
+        get().toast("Project deleted", "good");
+      } catch (err) {
+        get().toast(errorText(err), "bad");
+      }
     },
 
     renameProject(name) {

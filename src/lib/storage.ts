@@ -52,6 +52,8 @@ export interface ProjectStorage {
   scanProjects(dir: string): Promise<ProjectSummary[]>;
   rememberProject(handle: string, name: string): Promise<void>;
   forgetProject(handle: string): Promise<void>;
+  /** Erases the whole bundle from disk. Only accepts a real .belo directory. */
+  deleteProject(handle: string): Promise<void>;
 
   /** Native picker for an existing project. Resolves to null when cancelled. */
   pickProject(startIn?: string | null): Promise<string | null>;
@@ -184,6 +186,8 @@ const desktopStorage: ProjectStorage = {
     invoke("remember_project", { path, name, openedAt: new Date().toISOString() }),
 
   forgetProject: (path) => invoke("forget_project", { path }),
+
+  deleteProject: (path) => invoke("delete_project", { path }),
 
   async pickProject(startIn) {
     const { open } = await import("@tauri-apps/plugin-dialog");
