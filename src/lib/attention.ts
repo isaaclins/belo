@@ -14,7 +14,7 @@ export interface Attention {
   maps: AttentionMap[];
 }
 
-/** Cells at or above this share of the map maximum count as the hot region. */
+/** Cells at or above this share of the map's own range count as the hot region. */
 export const HOT_RATIO = 0.6;
 
 export interface Rect {
@@ -90,22 +90,27 @@ export interface CellBox {
   row1: number;
 }
 
+/**
+ * The box is thresholded on the same normalized heat the tint uses, not on a
+ * share of the raw score. A confident softmax puts every cell near 1.0, so a
+ * fraction of the maximum would box the whole frame and say nothing; the share
+ * of the map's own range is what actually marks the evidence.
+ */
 export function hotBox(
   values: number[],
   rows: number,
   cols: number,
   ratio = HOT_RATIO,
 ): CellBox | null {
-  const { max } = mapRange(values);
-  if (max <= 0) return null;
-  const cutoff = max * ratio;
+  const range = mapRange(values);
+  if (range.max <= 0) return null;
   let col0 = cols;
   let row0 = rows;
   let col1 = -1;
   let row1 = -1;
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
-      if ((values[row * cols + col] ?? 0) < cutoff) continue;
+      if (heat(values[row * cols + col] ?? 0, range) < ratio) continue;
       if (col < col0) col0 = col;
       if (col > col1) col1 = col;
       if (row < row0) row0 = row;
