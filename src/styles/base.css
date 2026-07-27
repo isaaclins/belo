@@ -4,10 +4,16 @@
   box-sizing: border-box;
 }
 
+/* The viewport chain. Every level is exactly one viewport tall so the shell can
+   hand a definite height down to the views. 100dvh wins where it is supported,
+   which matters in WKWebView where 100vh over-reports the visible area. */
 html,
 body,
 #root {
+  width: 100%;
   height: 100%;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 /* No user zoom anywhere: this is an app window, not a document. Layout still
@@ -132,12 +138,6 @@ button {
 }
 
 @media (max-width: 700px) {
-  html,
-  body,
-  #root {
-    height: 100dvh;
-  }
-
   body {
     font-size: 14px;
     -webkit-tap-highlight-color: transparent;

@@ -158,7 +158,7 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
+    <div className={manifest ? "shell shell--project" : "shell"}>
       <header className="topbar">
         <div className="topbar__brand">
           <span className="topbar__mark" aria-hidden="true" />

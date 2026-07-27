@@ -1,9 +1,14 @@
 /* App shell and view layouts. */
 
+/* Column stack rather than a fixed row template: the busy bar and the toasts
+   come and go, and a template would hand their row to whatever renders next. */
 .shell {
-  display: grid;
-  grid-template-rows: var(--header-h) auto 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  overflow: hidden;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 /* ---------- Boot ---------- */
@@ -46,8 +51,10 @@
 /* ---------- Top bar ---------- */
 .topbar {
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--s3);
+  min-height: var(--header-h);
   padding: 0 var(--s4);
   background: var(--ink);
   color: var(--paper);
@@ -166,8 +173,8 @@
 .tabs {
   display: flex;
   align-items: stretch;
+  align-self: stretch;
   gap: var(--s2);
-  height: 100%;
   padding-top: 10px;
 }
 
@@ -226,6 +233,7 @@
 /* ---------- Busy bar ---------- */
 .busybar {
   display: grid;
+  flex: none;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: var(--s3);
@@ -239,9 +247,20 @@
   font-weight: 700;
 }
 
+/* One full height row, so whichever view renders inherits a definite height and
+   can scroll inside itself instead of pushing the shell open. */
 .stagearea {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
   background: var(--paper);
+}
+
+.stagearea > * {
+  min-width: 0;
+  min-height: 0;
 }
 
 /* ---------- Home ---------- */
@@ -419,14 +438,15 @@
 /* ---------- Label view ---------- */
 .label {
   display: grid;
-  grid-template-columns: 264px 1fr;
+  grid-template-columns: 264px minmax(0, 1fr);
   height: 100%;
   min-height: 0;
 }
 
 .rail {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   min-height: 0;
   background: var(--paper-deep);
   border-right: var(--border-w) solid var(--ink);
@@ -434,6 +454,7 @@
 
 .rail__head {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   padding: var(--s3) var(--s3) var(--s3) var(--s4);
@@ -442,14 +463,17 @@
 
 .rail__list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
   margin: 0;
   padding: var(--s3);
   list-style: none;
 }
 
 .rail__foot {
+  flex: none;
   padding: var(--s3) var(--s4);
   border-top: var(--border-w-thin) solid var(--ink);
   font-size: 11px;
@@ -498,15 +522,18 @@
   border-style: dashed;
 }
 
+/* Column stack, not a row template: the selection tools only exist while images
+   are selected, and the grid must keep the leftover height either way. */
 .pane {
-  display: grid;
-  grid-template-rows: auto auto 1fr;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
 }
 
 .pane__head {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: var(--s4);
@@ -541,6 +568,7 @@
 
 .seltools {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--s3);
@@ -605,6 +633,9 @@
 
 .drop {
   position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -633,7 +664,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
   gap: var(--s3);
-  height: 100%;
+  min-height: 0;
   padding: var(--s4);
   align-content: start;
 }
@@ -1145,13 +1176,17 @@
 
 /* ---------- Phone layout ---------- */
 @media (max-width: 700px) {
+  /* No project means no bottom tab bar, so only the home inset is reserved. */
   .shell {
-    grid-template-rows: auto auto minmax(0, 1fr);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .shell--project {
     padding-bottom: calc(64px + env(safe-area-inset-bottom));
   }
 
   .topbar {
-    min-height: 58px;
+    min-height: calc(58px + env(safe-area-inset-top));
     gap: var(--s2);
     padding: env(safe-area-inset-top) var(--s3) 0;
   }
@@ -1219,9 +1254,9 @@
 
   .tabs {
     position: fixed;
-    right: 0;
+    right: env(safe-area-inset-right);
     bottom: 0;
-    left: 0;
+    left: env(safe-area-inset-left);
     z-index: 80;
     height: calc(64px + env(safe-area-inset-bottom));
     gap: 0;
@@ -1320,13 +1355,14 @@
   }
 
   .label {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
   }
 
   .rail {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto;
+    flex: none;
+    flex-direction: row;
+    align-items: stretch;
     border-right: 0;
     border-bottom: var(--border-w) solid var(--ink);
   }
@@ -1339,8 +1375,10 @@
   }
 
   .rail__list {
+    flex: 1 1 auto;
     flex-direction: row;
     gap: var(--s2);
+    min-width: 0;
     padding: 6px var(--s2);
     overflow-x: auto;
     overflow-y: hidden;
@@ -1358,10 +1396,6 @@
 
   .rail__foot {
     display: none;
-  }
-
-  .pane {
-    grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   .pane__head {
