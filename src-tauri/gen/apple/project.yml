@@ -1,6 +1,6 @@
 name: belo
 options:
-  bundleIdPrefix: com.belo.app
+  bundleIdPrefix: app.belo
   deploymentTarget:
     iOS: 15.0
 fileGroups: [../../src]
@@ -11,7 +11,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: Belo
-      PRODUCT_BUNDLE_IDENTIFIER: com.belo.app
+      PRODUCT_BUNDLE_IDENTIFIER: app.belo
 targetTemplates:
   app:
     type: application
@@ -51,8 +51,9 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
+        CFBundleShortVersionString: 0.2.0
+        CFBundleVersion: "0.2.0"
+        NSCameraUsageDescription: Belo uses the camera to capture training images and to run live classification. Images stay on this device.
     entitlements:
       path: belo_iOS/belo_iOS.entitlements
     scheme:

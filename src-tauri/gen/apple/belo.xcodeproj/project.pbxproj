@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		3FCE1EADA6124072AE27B3D4 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 61F03DDF0AA22B6CF873F030 /* WebKit.framework */; };
 		42131677899456902250989A /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 67ECEB8292165D47EBA465F9 /* main.mm */; };
+		502E4ADFE56EBE58161AA52F /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 0C3ED059F27F51BEE7AAF49C /* libapp.a */; };
 		583B2D714BA52244CB9D0DDB /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 82FF48435943E621789981DC /* LaunchScreen.storyboard */; };
 		638F2A7EF16573F7C2D21DF8 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A0CB0FE4F7C68FA3D77C718 /* CoreGraphics.framework */; };
 		69D9292D1D1FB3859C11A773 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7B9834B0CCDA6E240F6F0869 /* MetalKit.framework */; };
@@ -22,6 +23,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0C3ED059F27F51BEE7AAF49C /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		1057C937012C120E5829461C /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		172AAA9B4ED8B4D24A4D1EB0 /* belo_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = belo_iOS.entitlements; sourceTree = "<group>"; };
 		1F251D9744625BE350F667AC /* belo_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = belo_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -64,8 +66,17 @@
 		167195BC204EE7C7807CFE78 /* Externals */ = {
 			isa = PBXGroup;
 			children = (
+				ACEA635544BBD6D46D29378F /* arm64 */,
 			);
 			path = Externals;
+			sourceTree = "<group>";
+		};
+		212AC3EBF1A1BD519C59D72E /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				0C3ED059F27F51BEE7AAF49C /* libapp.a */,
+			);
+			path = debug;
 			sourceTree = "<group>";
 		};
 		225101EB542F065A4C67E04E = {
@@ -131,6 +142,14 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		ACEA635544BBD6D46D29378F /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				212AC3EBF1A1BD519C59D72E /* debug */,
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
 		E5115E472C970F623D0A4A84 /* belo */ = {
 			isa = PBXGroup;
 			children = (
@@ -148,6 +167,13 @@
 			);
 			name = src;
 			path = ../../src;
+			sourceTree = "<group>";
+		};
+		"TEMP_8A1AE1BF-63A5-4750-8531-08B32B1F1D44" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -211,6 +237,7 @@
 				8D87D7892821CBD1C9B3F97E /* Assets.xcassets in Resources */,
 				583B2D714BA52244CB9D0DDB /* LaunchScreen.storyboard in Resources */,
 				F29D0D28BCA91E11EEE8CD6B /* assets in Resources */,
+				502E4ADFE56EBE58161AA52F /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

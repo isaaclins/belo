@@ -57,13 +57,15 @@ export function useWebcam(active: boolean) {
       } catch (err) {
         if (cancelled) return;
         setStatus("error");
-        setError(
+        const message =
           err instanceof Error && err.name === "NotAllowedError"
             ? "Camera access was denied. Allow it in your system privacy settings and try again."
-            : err instanceof Error
-              ? err.message
-              : "The camera could not be started",
-        );
+            : err instanceof Error && (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")
+              ? "No camera is available. The iOS Simulator has no camera, so import photos instead."
+              : err instanceof Error
+                ? err.message
+                : "The camera could not be started";
+        setError(message);
       }
     })();
 

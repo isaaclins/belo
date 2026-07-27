@@ -1,10 +1,11 @@
 # Belo
 
-A desktop app for training image classifiers on your own pictures. Collect images,
-label them, train, and use the result live from your webcam. Everything runs on the
-machine it is installed on: no account, no upload, no network calls at runtime.
+An app for training image classifiers on your own pictures. Collect images, label
+them, train, and use the result live from your camera. Everything runs on the device:
+no account, no upload, no network calls at runtime.
 
-Version 0.1.0.
+Version 0.2.0. Desktop and iOS are supported. Android is code-complete but has not yet
+been built on an Android toolchain.
 
 ## What it does
 
@@ -60,7 +61,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 1,
-  "appVersion": "0.1.0",
+  "appVersion": "0.2.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -137,25 +138,99 @@ public/models/            bundled MobileNet weights
 
 ## Mobile
 
-This version targets desktop only, but the platform-specific surface is deliberately
-narrow so an iOS and Android port through Tauri 2 mobile stays cheap. Two modules hold
-every platform assumption:
+The mobile backend keeps `.belo` directory bundles inside the app's sandboxed Documents
+folder. Image import uses the native photo picker and copies selected media into the
+sandbox before normalization. Mobile does not expose folder drag and drop or external
+`.belo` folder opening, so projects currently move between devices only through a manual
+container backup.
 
-- `src/lib/storage.ts` exposes the `ProjectStorage` interface and one desktop
-  implementation. It is the only place that imports Tauri APIs, builds paths, calls the
-  asset protocol or opens native pickers. A mobile backend writes a second object that
-  satisfies the same interface, backed by sandboxed app storage and a document or photo
-  picker, then changes the final `export const storage` binding.
-- `src/lib/capture.ts` exposes the `CameraSource` interface and one web implementation.
-  It is the only place that calls `getUserMedia` or `enumerateDevices`. A native camera
-  plugin implements the same three methods.
+Phone viewports use bottom stage tabs, a horizontal label rail, safe-area insets and
+44-point minimum touch targets. Desktop rules are unchanged above the phone breakpoint.
+The camera still uses `getUserMedia`: wry grants the webview media request, while the OS
+owns the user-facing runtime prompt.
 
-Everything else, including the store, views and the training code, is written against
-those interfaces and against opaque handles rather than filesystem paths. The remaining
-work for a port is therefore: the two implementations above, mobile permission entries,
-and a responsive pass on the views, which are currently laid out for a window at least
-1000px wide. Drag and drop intake lives in `src/lib/images.ts` and already degrades to a
-flat file list where folder drops are unavailable.
+### iOS
+
+Requirements are Xcode, CocoaPods, XcodeGen, and the three Rust targets:
+
+```bash
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+npm install
+```
+
+The generated Xcode project is committed under `src-tauri/gen/apple`, so normal builds do
+not need to run `tauri ios init`. Re-running init replaces generated customizations and
+must be followed by restoring the 15.0 deployment target, `app.belo` bundle identifier
+and camera usage description from `project.yml`.
+
+Build an unsigned simulator app:
+
+```bash
+npx tauri ios build --debug --target aarch64-sim --no-sign --ci
+xcrun simctl boot "iPhone 17 Pro"
+xcrun simctl install "iPhone 17 Pro" src-tauri/gen/apple/build/arm64-sim/Belo.app
+xcrun simctl launch "iPhone 17 Pro" app.belo
+```
+
+A physical-device or distribution build needs an Apple development team and signing:
+
+```bash
+export APPLE_DEVELOPMENT_TEAM="YOUR_TEAM_ID"
+npx tauri ios build --target aarch64
+```
+
+The minimum is iOS 15.0 because Xcode 27 no longer builds for iOS 14, while WKWebView
+camera capture itself requires iOS 14.3 or newer. The simulator has no camera. Belo shows
+a clear no-camera message there and supports photo import as the test path instead.
+
+Local verification used Xcode 27.0 and the iPhone 17 Pro simulators on iOS 26.4 and 26.5.
+The app built, installed, launched, created its sandbox Documents/Belo folder and rendered
+the responsive home flow. XCUITest interaction with WKWebView is currently blocked by an
+iOS 26 simulator accessibility-bundle conflict in Xcode 27, so picker, labeling and
+training interaction still need a physical-device pass. The iOS 27.0 simulator also
+asserts when Tauri's current tao runtime uses the legacy UIKit lifecycle. Both are listed
+as known gaps rather than treated as verified behavior.
+
+### Android
+
+Android was not built locally because this machine intentionally has no SDK or NDK. The
+committed Android configuration sets API 24 as the minimum, version code 2000, sandboxed
+Documents storage, and `android.permission.CAMERA`. wry requests the runtime camera grant.
+The system photo picker supplies temporary URI access, and `tauri-plugin-fs` reads those
+URIs without broad media-library permissions.
+
+To finish verification on a machine with Android Studio:
+
+1. In SDK Manager, install the current Android SDK Platform, Platform-Tools, Build-Tools,
+   Command-line Tools, and NDK (Side by side).
+2. Set the toolchain environment variables and Rust targets:
+
+   ```bash
+   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+   export ANDROID_HOME="$HOME/Library/Android/sdk"
+   export NDK_HOME="$ANDROID_HOME/ndk/$(ls -1 "$ANDROID_HOME/ndk" | tail -1)"
+   rustup target add aarch64-linux-android armv7-linux-androideabi \
+     i686-linux-android x86_64-linux-android
+   ```
+
+3. Generate the Android Studio project, then confirm its manifest contains the camera
+   permission generated from `Cargo.toml`:
+
+   ```bash
+   npx tauri android init
+   grep android.permission.CAMERA src-tauri/gen/android/app/src/main/AndroidManifest.xml
+   ```
+
+4. Build and run on an emulator or device:
+
+   ```bash
+   npx tauri android build --debug
+   npx tauri android dev
+   ```
+
+5. Verify project creation and reopening, multi-photo import, two-label training, model
+   restoration after relaunch, camera denial and grant behavior, live classification,
+   and rotation or resize behavior.
 
 ## Camera and permissions
 
@@ -163,6 +238,10 @@ The webcam is used through `getUserMedia` inside the webview.
 
 - **macOS** ships `NSCameraUsageDescription` via `src-tauri/Info.plist`. The first capture
   triggers the normal system permission prompt.
+- **iOS** ships the same description through `src-tauri/Info.ios.plist` and the generated
+  Xcode project. wry grants the WKWebView media request before iOS shows its prompt.
+- **Android** declares `android.permission.CAMERA` through Cargo mobile metadata. wry asks
+  for the runtime permission when the webview requests video capture.
 - **Windows** works through WebView2 with the standard camera privacy setting.
 - **Linux** uses WebKitGTK. Camera support there depends on the installed WebKitGTK build,
   so treat it as the least tested of the three.

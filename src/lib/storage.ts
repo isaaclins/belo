@@ -226,6 +226,8 @@ const mobileStorage: ProjectStorage = {
 };
 
 const IS_MOBILE =
-  typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  typeof navigator !== "undefined" &&
+  (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 
 export const storage: ProjectStorage = IS_MOBILE ? mobileStorage : desktopStorage;
