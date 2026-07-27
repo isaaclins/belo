@@ -2,7 +2,7 @@
 // Training runs entirely in the webview and reports progress per epoch.
 
 import * as tf from "@tensorflow/tfjs";
-import type { StoredHead, TrainSettings } from "../types";
+import type { ProjectMode, StoredHead, TrainSettings } from "../types";
 import { FEATURE_SIZE } from "./features";
 
 export interface TrainProgress {
@@ -21,7 +21,12 @@ export interface TrainResult {
   history: TrainProgress[];
 }
 
-export function buildHead(numClasses: number, settings: TrainSettings): tf.Sequential {
+export function buildHead(
+  numClasses: number,
+  settings: TrainSettings,
+  mode: ProjectMode = "single",
+): tf.Sequential {
+  const multi = mode === "multi";
   const model = tf.sequential();
   model.add(
     tf.layers.dense({
@@ -35,14 +40,17 @@ export function buildHead(numClasses: number, settings: TrainSettings): tf.Seque
   model.add(
     tf.layers.dense({
       units: numClasses,
-      activation: "softmax",
+      // Multi mode scores every label on its own, so the outputs must not
+      // compete the way a softmax makes them.
+      activation: multi ? "sigmoid" : "softmax",
       kernelInitializer: "varianceScaling",
-      useBias: false,
+      useBias: multi,
     }),
   );
   model.compile({
     optimizer: tf.train.adam(settings.learningRate),
-    loss: numClasses === 2 ? "binaryCrossentropy" : "categoricalCrossentropy",
+    loss:
+      multi || numClasses === 2 ? "binaryCrossentropy" : "categoricalCrossentropy",
     metrics: ["accuracy"],
   });
   return model;
@@ -50,27 +58,32 @@ export function buildHead(numClasses: number, settings: TrainSettings): tf.Seque
 
 export interface TrainInput {
   features: Float32Array[];
-  labelIndices: number[];
+  /** One row per sample: a one hot vector in single mode, a 0/1 set in multi. */
+  targets: number[][];
   numClasses: number;
+  mode: ProjectMode;
   settings: TrainSettings;
   onProgress?: (progress: TrainProgress) => void;
   shouldStop?: () => boolean;
 }
 
 export async function trainHead(input: TrainInput): Promise<TrainResult> {
-  const { features, labelIndices, numClasses, settings } = input;
+  const { features, targets, numClasses, mode, settings } = input;
   const sampleCount = features.length;
   if (sampleCount === 0) throw new Error("There is nothing to train on yet");
 
   const flat = new Float32Array(sampleCount * FEATURE_SIZE);
   features.forEach((f, i) => flat.set(f, i * FEATURE_SIZE));
 
+  const flatTargets = new Float32Array(sampleCount * numClasses);
+  targets.forEach((row, i) => flatTargets.set(row, i * numClasses));
+
   const xs = tf.tensor2d(flat, [sampleCount, FEATURE_SIZE]);
-  const ys = tf.oneHot(tf.tensor1d(labelIndices, "int32"), numClasses).toFloat();
+  const ys = tf.tensor2d(flatTargets, [sampleCount, numClasses]);
 
   // Only hold out a validation split when every class can spare examples.
   const canValidate = sampleCount >= 20 && settings.validationSplit > 0;
-  const model = buildHead(numClasses, settings);
+  const model = buildHead(numClasses, settings, mode);
   const history: TrainProgress[] = [];
 
   try {
@@ -134,9 +147,11 @@ export function serializeHead(
   model: tf.Sequential,
   labelIds: string[],
   hiddenUnits: number,
+  mode: ProjectMode = "single",
 ): StoredHead {
   return {
     formatVersion: 1,
+    mode,
     labelIds,
     hiddenUnits,
     featureSize: FEATURE_SIZE,
@@ -149,10 +164,12 @@ export function serializeHead(
 
 export function deserializeHead(stored: StoredHead, settings: TrainSettings): tf.Sequential | null {
   if (stored.featureSize !== FEATURE_SIZE) return null;
-  const model = buildHead(stored.labelIds.length, {
-    ...settings,
-    hiddenUnits: stored.hiddenUnits,
-  });
+  // Heads written before multi mode carry no mode and are always softmax.
+  const model = buildHead(
+    stored.labelIds.length,
+    { ...settings, hiddenUnits: stored.hiddenUnits },
+    stored.mode === "multi" ? "multi" : "single",
+  );
   const expected = model.getWeights();
   if (expected.length !== stored.weights.length) {
     model.dispose();

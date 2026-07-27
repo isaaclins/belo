@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { useStore, type ImageVerdict } from "../lib/store";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
-import { DEFAULT_SETTINGS, type TrainSettings } from "../lib/types";
+import { DEFAULT_SETTINGS, hasLabel, labelsOf, type TrainSettings } from "../lib/types";
 import { storage } from "../lib/storage";
 
 type Filter = "all" | "correct" | "wrong";
@@ -63,24 +63,19 @@ export function TrainView() {
 
   const labels = manifest?.labels ?? [];
   const images = manifest?.images ?? [];
-  const labeledCount = images.filter((img) => img.labelId).length;
-  const usableLabels = labels.filter((label) => images.some((img) => img.labelId === label.id));
+  const multi = manifest?.mode === "multi";
+  const labeledCount = images.filter((img) => labelsOf(img).length > 0).length;
+  const usableLabels = labels.filter((label) => images.some((img) => hasLabel(img, label.id)));
   const ready = usableLabels.length >= 2;
   const running = train.phase === "reading" || train.phase === "training" || train.phase === "scoring";
 
-  const perLabel = useMemo(() => {
-    if (train.verdicts.length === 0) return [];
-    return usableLabels.map((label) => {
-      const mine = train.verdicts.filter((v) => v.actualLabelId === label.id);
-      const hits = mine.filter((v) => v.correct).length;
-      return {
-        label,
-        total: mine.length,
-        hits,
-        rate: mine.length === 0 ? 0 : hits / mine.length,
-      };
-    });
-  }, [train.verdicts, usableLabels]);
+  const perLabel = useMemo(
+    () =>
+      train.labelStats
+        .map((stat) => ({ stat, label: labels.find((l) => l.id === stat.labelId) ?? null }))
+        .filter((row) => row.label !== null),
+    [train.labelStats, labels],
+  );
 
   const wrongCount = train.verdicts.filter((v) => !v.correct).length;
   // Land on the mistakes when there are any, otherwise show the full set
@@ -137,7 +132,9 @@ export function TrainView() {
           </h2>
           <p className="train__sub">
             {ready
-              ? `${labeledCount} labeled images across ${usableLabels.length} labels. Features come from a frozen MobileNet, only the small head learns.`
+              ? `${labeledCount} labeled images across ${usableLabels.length} labels. Features come from a frozen MobileNet, only the small head learns${
+                  multi ? ", with one yes or no output per label" : ""
+                }.`
               : "You need at least two labels that both hold images. Head back to the label view and collect a few more."}
           </p>
 
@@ -261,23 +258,58 @@ export function TrainView() {
                     >
                       <img src={storage.imageUrl(path, fileFor(verdict))} alt="" loading="lazy" />
                       <div className="verdict__body">
-                        <span className="verdict__row">
-                          <span className="dot" style={{ background: colorFor(verdict.actualLabelId) }} />
-                          <span className="verdict__name">{nameFor(verdict.actualLabelId)}</span>
-                        </span>
-                        {verdict.correct ? (
-                          <span className="badge badge--ok">{pct(verdict.confidence)}</span>
+                        {multi ? (
+                          <>
+                            <span className="verdict__row verdict__row--wrap">
+                              {verdict.actualLabelIds.length === 0 ? (
+                                <span className="verdict__name">no labels</span>
+                              ) : (
+                                verdict.actualLabelIds.map((id) => (
+                                  <span key={id} className="verdict__row">
+                                    <span className="dot" style={{ background: colorFor(id) }} />
+                                    <span className="verdict__name">{nameFor(id)}</span>
+                                  </span>
+                                ))
+                              )}
+                            </span>
+                            {verdict.correct ? (
+                              <span className="badge badge--ok">{pct(verdict.confidence)}</span>
+                            ) : (
+                              <span className="verdict__guess mono">
+                                read as{" "}
+                                {verdict.predictedLabelIds.length === 0
+                                  ? "none"
+                                  : verdict.predictedLabelIds.map(nameFor).join(" + ")}
+                              </span>
+                            )}
+                          </>
                         ) : (
                           <>
-                            <span className="verdict__guess mono">
-                              read as {nameFor(verdict.predictedLabelId)} {pct(verdict.confidence)}
+                            <span className="verdict__row">
+                              <span
+                                className="dot"
+                                style={{ background: colorFor(verdict.actualLabelId) }}
+                              />
+                              <span className="verdict__name">{nameFor(verdict.actualLabelId)}</span>
                             </span>
-                            <button
-                              className="btn btn--sm"
-                              onClick={() => moveImages([verdict.imageId], verdict.predictedLabelId)}
-                            >
-                              Move to {nameFor(verdict.predictedLabelId)}
-                            </button>
+                            {verdict.correct ? (
+                              <span className="badge badge--ok">{pct(verdict.confidence)}</span>
+                            ) : (
+                              <>
+                                <span className="verdict__guess mono">
+                                  read as {nameFor(verdict.predictedLabelId)}{" "}
+                                  {pct(verdict.confidence)}
+                                </span>
+                                <button
+                                  className="btn btn--sm"
+                                  onClick={() =>
+                                    moveImages([verdict.imageId], verdict.predictedLabelId)
+                                  }
+                                >
+                                  Move to {nameFor(verdict.predictedLabelId)}
+                                </button>
+                              </>
+                            )}
                           </>
                         )}
                       </div>
@@ -292,25 +324,32 @@ export function TrainView() {
         <aside className="train__side">
           <section className="card">
             <div className="card__head">
-              <h3>Per label</h3>
+              <h3>{multi ? "Per label accuracy" : "Per label"}</h3>
             </div>
             <div className="card__body stack">
               {perLabel.length === 0 ? (
                 <p className="field__hint">Train once to see how each label performs.</p>
               ) : (
-                perLabel.map((row) => (
-                  <div key={row.label.id} className="labelrate">
-                    <div className="row row--tight">
-                      <span className="dot" style={{ background: swatch(row.label.color) }} />
-                      <span className="labelrate__name">{row.label.name}</span>
-                      <div className="spacer" />
-                      <span className="mono labelrate__num">
-                        {row.hits}/{row.total}
-                      </span>
+                <>
+                  <p className="field__hint">
+                    {multi
+                      ? "Share of images where this label's yes or no call was right."
+                      : "Share of this label's images the model read correctly."}
+                  </p>
+                  {perLabel.map(({ stat, label }) => (
+                    <div key={stat.labelId} className="labelrate">
+                      <div className="row row--tight">
+                        <span className="dot" style={{ background: swatch(label!.color) }} />
+                        <span className="labelrate__name">{label!.name}</span>
+                        <div className="spacer" />
+                        <span className="mono labelrate__num">
+                          {stat.hits}/{stat.total}
+                        </span>
+                      </div>
+                      <Meter value={stat.rate} />
                     </div>
-                    <Meter value={row.rate} />
-                  </div>
-                ))
+                  ))}
+                </>
               )}
             </div>
           </section>

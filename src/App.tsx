@@ -44,6 +44,24 @@ function SaveState() {
   );
 }
 
+/** Shows which classification mode the open project was created with. */
+function ModeBadge() {
+  const mode = useStore((s) => s.manifest?.mode ?? "single");
+  return (
+    <span
+      className="badge badge--idle topbar__mode"
+      title={
+        mode === "multi"
+          ? "Multi label project: every label gets its own yes or no"
+          : "Single label project: one winning label per image"
+      }
+    >
+      {mode === "multi" ? "multi" : "single"}
+      <span className="topbar__mode-word"> label</span>
+    </span>
+  );
+}
+
 /** Quiet marker for the debounced background retrain. Never blocks anything. */
 function RetrainFlag() {
   const autoRetraining = useStore((s) => s.autoRetraining);
@@ -151,6 +169,7 @@ export default function App() {
           <>
             <span className="topbar__sep" aria-hidden="true" />
             <ProjectName />
+            <ModeBadge />
             <SaveState />
             <RetrainFlag />
             <div className="spacer" />

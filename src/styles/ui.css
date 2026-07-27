@@ -167,6 +167,47 @@
   outline-offset: 2px;
 }
 
+/* ---------- Mode picker ---------- */
+.modepick {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--s2);
+}
+
+.modepick__opt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--s3);
+  background: var(--panel);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  text-align: left;
+  cursor: pointer;
+}
+
+.modepick__opt--on {
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.modepick__title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.modepick__text {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+.modepick__opt--on .modepick__text {
+  color: var(--ink);
+}
+
 /* ---------- Badge / chip ---------- */
 .badge {
   display: inline-flex;

@@ -5,14 +5,19 @@ import { create } from "zustand";
 import type * as tfTypes from "@tensorflow/tfjs";
 import { storage, type ImportRef } from "./storage";
 import {
-  DEFAULT_SETTINGS,
+  hasLabel,
+  labelsOf,
   makeId,
+  migrateManifest,
+  MULTI_THRESHOLD,
   newManifest,
   SWATCH_COUNT,
+  withLabels,
   type ImageRecord,
   type ImageSource,
   type Label,
   type ProjectManifest,
+  type ProjectMode,
   type ProjectSummary,
   type StoredHead,
   type TrainSettings,
@@ -55,10 +60,26 @@ export type TrainPhase = "idle" | "reading" | "training" | "scoring" | "done" | 
 
 export interface ImageVerdict {
   imageId: string;
+  /** Single mode truth and guess. In multi mode these hold the first label. */
   actualLabelId: string;
   predictedLabelId: string;
+  /** Multi mode truth and guess: the full label sets. */
+  actualLabelIds: string[];
+  predictedLabelIds: string[];
   confidence: number;
   correct: boolean;
+}
+
+/**
+ * Per label score after a run. In single mode this is recall: how many images
+ * of that label were read correctly. In multi mode it is the per label yes/no
+ * accuracy over every scored image.
+ */
+export interface LabelStat {
+  labelId: string;
+  total: number;
+  hits: number;
+  rate: number;
 }
 
 export interface TrainState {
@@ -70,6 +91,7 @@ export interface TrainState {
   accuracy: number | null;
   valAccuracy: number | null;
   verdicts: ImageVerdict[];
+  labelStats: LabelStat[];
 }
 
 export interface Prediction {
@@ -107,7 +129,7 @@ interface State {
   toast: (text: string, tone?: Toast["tone"]) => void;
   dismissToast: (id: string) => void;
 
-  createProject: (name: string) => Promise<void>;
+  createProject: (name: string, mode?: ProjectMode) => Promise<void>;
   openProject: (path: string) => Promise<void>;
   openProjectDialog: () => Promise<void>;
   closeProject: () => void;
@@ -126,8 +148,15 @@ interface State {
   importImages: (labelId: string | null) => Promise<number>;
   /** Opens the desktop folder picker and imports everything it returns. */
   importFolder: (labelId: string | null) => Promise<number>;
-  addFromDrawable: (source: Drawable, labelId: string | null, origin: ImageSource) => Promise<void>;
+  /** Accepts one label, a label set for multi mode projects, or null. */
+  addFromDrawable: (
+    source: Drawable,
+    labels: string | string[] | null,
+    origin: ImageSource,
+  ) => Promise<void>;
   moveImages: (imageIds: string[], labelId: string | null) => void;
+  /** Multi mode: adds the label where it is missing, removes it where it is not. */
+  toggleImageLabels: (imageIds: string[], labelId: string) => void;
   removeImages: (imageIds: string[]) => Promise<void>;
 
   updateSettings: (patch: Partial<TrainSettings>) => void;
@@ -171,7 +200,80 @@ const idleTrainState: TrainState = {
   accuracy: null,
   valAccuracy: null,
   verdicts: [],
+  labelStats: [],
 };
+
+/** Turns raw head outputs into per image verdicts for the Train view. */
+function scoreSamples(
+  samples: ImageRecord[],
+  scores: number[][],
+  labelIds: string[],
+  mode: ProjectMode,
+): ImageVerdict[] {
+  return samples.map((record, i) => {
+    const row = scores[i] ?? [];
+    const actual = labelsOf(record);
+
+    if (mode === "multi") {
+      const predicted = labelIds.filter((_, index) => (row[index] ?? 0) >= MULTI_THRESHOLD);
+      const correct =
+        predicted.length === actual.length && predicted.every((id) => actual.includes(id));
+      // Average distance from the threshold decision, so a row of confident
+      // yes/no calls reads high and a row of coin flips reads low.
+      const margin =
+        labelIds.length === 0
+          ? 0
+          : labelIds.reduce((sum, id, index) => {
+              const score = row[index] ?? 0;
+              return sum + (actual.includes(id) ? score : 1 - score);
+            }, 0) / labelIds.length;
+      return {
+        imageId: record.id,
+        actualLabelId: actual[0] ?? "",
+        predictedLabelId: predicted[0] ?? "",
+        actualLabelIds: actual,
+        predictedLabelIds: predicted,
+        confidence: margin,
+        correct,
+      };
+    }
+
+    let best = 0;
+    row.forEach((value, index) => {
+      if (value > row[best]) best = index;
+    });
+    const predictedLabelId = labelIds[best] ?? "";
+    return {
+      imageId: record.id,
+      actualLabelId: record.labelId ?? actual[0] ?? "",
+      predictedLabelId,
+      actualLabelIds: actual,
+      predictedLabelIds: predictedLabelId ? [predictedLabelId] : [],
+      confidence: row[best] ?? 0,
+      correct: predictedLabelId === record.labelId,
+    };
+  });
+}
+
+function summarizeLabels(
+  verdicts: ImageVerdict[],
+  labelIds: string[],
+  mode: ProjectMode,
+): LabelStat[] {
+  return labelIds.map((labelId) => {
+    if (mode === "multi") {
+      // Per label accuracy: every image votes on every label.
+      const hits = verdicts.filter(
+        (v) => v.actualLabelIds.includes(labelId) === v.predictedLabelIds.includes(labelId),
+      ).length;
+      const total = verdicts.length;
+      return { labelId, total, hits, rate: total === 0 ? 0 : hits / total };
+    }
+    const mine = verdicts.filter((v) => v.actualLabelId === labelId);
+    const hits = mine.filter((v) => v.correct).length;
+    return { labelId, total: mine.length, hits, rate: mine.length === 0 ? 0 : hits / mine.length };
+  });
+}
 
 function errorText(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -228,10 +330,12 @@ export const useStore = create<State>((set, get) => {
   /** Labels that actually hold images, plus the samples that can be trained on. */
   const trainingSet = (manifest: ProjectManifest) => {
     const usable = manifest.labels.filter((label) =>
-      manifest.images.some((img) => img.labelId === label.id),
+      manifest.images.some((img) => hasLabel(img, label.id)),
     );
     const ids = new Set(usable.map((l) => l.id));
-    const samples = manifest.images.filter((img) => img.labelId && ids.has(img.labelId));
+    const samples = manifest.images.filter((img) =>
+      labelsOf(img).some((labelId) => ids.has(labelId)),
+    );
     return { labelIds: usable.map((l) => l.id), samples };
   };
 
@@ -270,14 +374,17 @@ export const useStore = create<State>((set, get) => {
       await loadFeatureModel();
 
       if (!auto) set((s) => ({ train: { ...s.train, message: "Reading images" } }));
+      const mode = manifest.mode;
       const features: Float32Array[] = [];
-      const labelIndices: number[] = [];
+      const targets: number[][] = [];
 
       for (let i = 0; i < samples.length; i += 1) {
         if (run.stop) throw new Error("Training cancelled");
         const record = samples[i];
         features.push(await featureFor(record));
-        labelIndices.push(labelIds.indexOf(record.labelId!));
+        // Single mode gets a one hot row, multi mode a 0/1 membership row.
+        const own = labelsOf(record);
+        targets.push(labelIds.map((id) => (own.includes(id) ? 1 : 0)));
         if (!auto) set((s) => ({ train: { ...s.train, done: i + 1 } }));
       }
 
@@ -289,8 +396,9 @@ export const useStore = create<State>((set, get) => {
 
       const result = await trainHead({
         features,
-        labelIndices,
+        targets,
         numClasses: labelIds.length,
+        mode,
         settings: manifest.settings,
         shouldStop: () => run.stop,
         onProgress: (progress) => {
@@ -334,27 +442,16 @@ export const useStore = create<State>((set, get) => {
         set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each image" } }));
       }
       const scores = predictBatch(result.model, features);
-      const verdicts: ImageVerdict[] = samples.map((record, i) => {
-        const row = scores[i] ?? [];
-        let best = 0;
-        row.forEach((value, index) => {
-          if (value > row[best]) best = index;
-        });
-        return {
-          imageId: record.id,
-          actualLabelId: record.labelId!,
-          predictedLabelId: labelIds[best] ?? "",
-          confidence: row[best] ?? 0,
-          correct: labelIds[best] === record.labelId,
-        };
-      });
+      const verdicts = scoreSamples(samples, scores, labelIds, mode);
+      const labelStats = summarizeLabels(verdicts, labelIds, mode);
 
-      const stored = serializeHead(result.model, labelIds, manifest.settings.hiddenUnits);
+      const stored = serializeHead(result.model, labelIds, manifest.settings.hiddenUnits, mode);
       await storage.writeModel(path, JSON.stringify(stored));
 
       touch({
         model: {
           trainedAt: new Date().toISOString(),
+          mode,
           labelIds,
           epochs: result.history.length,
           accuracy: result.accuracy,
@@ -375,6 +472,7 @@ export const useStore = create<State>((set, get) => {
           accuracy: result.accuracy,
           valAccuracy: result.valAccuracy,
           verdicts,
+          labelStats,
         },
       }));
       await get().saveNow();
@@ -432,15 +530,24 @@ export const useStore = create<State>((set, get) => {
 
   const writeImageRecord = async (
     jpegBase64: string,
-    labelId: string | null,
+    labels: string | string[] | null,
     origin: ImageSource,
   ): Promise<ImageRecord> => {
     const path = get().path;
     if (!path) throw new Error("No project is open");
+    const mode = get().manifest?.mode ?? "single";
     const id = makeId("img");
     const file = `${id}.jpg`;
     await storage.writeImage(path, file, jpegBase64);
-    return { id, file, labelId, source: origin, addedAt: new Date().toISOString() };
+    const ids = labels === null ? [] : Array.isArray(labels) ? labels : [labels];
+    const record: ImageRecord = {
+      id,
+      file,
+      labelId: null,
+      source: origin,
+      addedAt: new Date().toISOString(),
+    };
+    return withLabels(record, ids, mode);
   };
 
   return {
@@ -508,10 +615,10 @@ export const useStore = create<State>((set, get) => {
       set({ toasts: get().toasts.filter((t) => t.id !== id) });
     },
 
-    async createProject(name) {
+    async createProject(name, mode = "single") {
       try {
         const dir = get().projectsDir ?? (await storage.defaultProjectsDir());
-        const manifest = newManifest(name.trim() || "Untitled", APP_VERSION);
+        const manifest = newManifest(name.trim() || "Untitled", APP_VERSION, mode);
         const path = await storage.createProject(dir, manifest.name, JSON.stringify(manifest, null, 2));
         featureCache.clear();
         dropModel();
@@ -534,8 +641,7 @@ export const useStore = create<State>((set, get) => {
     async openProject(path) {
       try {
         const text = await storage.readManifest(path);
-        const manifest = JSON.parse(text) as ProjectManifest;
-        manifest.settings = { ...DEFAULT_SETTINGS, ...manifest.settings };
+        const manifest = migrateManifest(JSON.parse(text) as ProjectManifest);
         featureCache.clear();
         dropModel();
         set({
@@ -653,17 +759,28 @@ export const useStore = create<State>((set, get) => {
     async deleteLabel(id) {
       const { manifest, path } = get();
       if (!manifest || !path) return;
-      const doomed = manifest.images.filter((img) => img.labelId === id);
+      // In multi mode an image can survive losing one of its labels, so only
+      // the ones left with nothing are deleted from the bundle.
+      const doomed = manifest.images.filter(
+        (img) => hasLabel(img, id) && labelsOf(img).length === 1,
+      );
       try {
         if (doomed.length > 0) await storage.deleteImages(path, doomed.map((img) => img.file));
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
       doomed.forEach((img) => featureCache.delete(img.id));
+      const gone = new Set(doomed.map((img) => img.id));
       const labels = manifest.labels.filter((l) => l.id !== id);
       touch({
         labels,
-        images: manifest.images.filter((img) => img.labelId !== id),
+        images: manifest.images
+          .filter((img) => !gone.has(img.id))
+          .map((img) =>
+            hasLabel(img, id)
+              ? withLabels(img, labelsOf(img).filter((labelId) => labelId !== id), manifest.mode)
+              : img,
+          ),
         model: null,
       });
       dropModel();
@@ -747,12 +864,12 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    async addFromDrawable(source, labelId, origin) {
+    async addFromDrawable(source, labels, origin) {
       const manifest = get().manifest;
       if (!manifest) return;
       try {
         const jpeg = normalizeToJpegBase64(source);
-        const record = await writeImageRecord(jpeg, labelId, origin);
+        const record = await writeImageRecord(jpeg, labels, origin);
         touch({ images: [...get().manifest!.images, record] });
         markStale();
         // Corrections from the Use view fold themselves in without a trip to
@@ -768,7 +885,31 @@ export const useStore = create<State>((set, get) => {
       if (!manifest) return;
       const moved = new Set(imageIds);
       touch({
-        images: manifest.images.map((img) => (moved.has(img.id) ? { ...img, labelId } : img)),
+        images: manifest.images.map((img) =>
+          moved.has(img.id) ? withLabels(img, labelId ? [labelId] : [], manifest.mode) : img,
+        ),
+      });
+      markStale();
+    },
+
+    toggleImageLabels(imageIds, labelId) {
+      const manifest = get().manifest;
+      if (!manifest || imageIds.length === 0) return;
+      const picked = new Set(imageIds);
+      const targets = manifest.images.filter((img) => picked.has(img.id));
+      // One tap, one outcome: add the label unless every image already has it.
+      const removing = targets.every((img) => hasLabel(img, labelId));
+      touch({
+        images: manifest.images.map((img) => {
+          if (!picked.has(img.id)) return img;
+          const own = labelsOf(img);
+          const next = removing
+            ? own.filter((id) => id !== labelId)
+            : own.includes(labelId)
+              ? own
+              : [...own, labelId];
+          return withLabels(img, next, manifest.mode);
+        }),
       });
       markStale();
     },
@@ -879,5 +1020,6 @@ export function labelById(manifest: ProjectManifest | null, id: string | null): 
 
 export function imagesForLabel(manifest: ProjectManifest | null, id: string | null): ImageRecord[] {
   if (!manifest) return [];
-  return manifest.images.filter((img) => img.labelId === id);
+  if (id === null) return manifest.images.filter((img) => labelsOf(img).length === 0);
+  return manifest.images.filter((img) => hasLabel(img, id));
 }

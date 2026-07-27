@@ -2,10 +2,25 @@
 // single source of truth for what gets written to project.json.
 
 export const IMAGE_SIZE = 224;
-export const FORMAT_VERSION = 1;
+/**
+ * 1: single label projects, one labelId per image.
+ * 2: adds project mode and, in multi mode, labelIds per image. Version 1
+ *    manifests load unchanged and are written back as version 2 on the next
+ *    save, with mode "single", which is exactly their old behavior.
+ */
+export const FORMAT_VERSION = 2;
 export const SWATCH_COUNT = 8;
 
+/** Score above which a label counts as present in multi mode. */
+export const MULTI_THRESHOLD = 0.5;
+
 export type ImageSource = "import" | "capture" | "feedback";
+
+/**
+ * single: softmax over the labels, exactly one winner per image.
+ * multi:  one sigmoid per label, so an image can be "X and Y but not Z".
+ */
+export type ProjectMode = "single" | "multi";
 
 export interface Label {
   id: string;
@@ -19,9 +34,31 @@ export interface ImageRecord {
   id: string;
   /** File name inside the bundle images/ directory. */
   file: string;
+  /** Single mode label, and the first label in multi mode. Null means unlabeled. */
   labelId: string | null;
+  /** Multi mode label set. Absent in single mode projects. */
+  labelIds?: string[];
   source: ImageSource;
   addedAt: string;
+}
+
+/** Every label on an image, whichever mode the project uses. */
+export function labelsOf(image: ImageRecord): string[] {
+  if (image.labelIds) return image.labelIds;
+  return image.labelId ? [image.labelId] : [];
+}
+
+export function hasLabel(image: ImageRecord, labelId: string): boolean {
+  return labelsOf(image).includes(labelId);
+}
+
+/** Rebuilds an image record around a label set, keeping both fields in step. */
+export function withLabels(image: ImageRecord, labelIds: string[], mode: ProjectMode): ImageRecord {
+  if (mode === "single") {
+    const { labelIds: _drop, ...rest } = image;
+    return { ...rest, labelId: labelIds[0] ?? null };
+  }
+  return { ...image, labelId: labelIds[0] ?? null, labelIds };
 }
 
 export interface TrainSettings {
@@ -34,6 +71,7 @@ export interface TrainSettings {
 
 export interface ModelMeta {
   trainedAt: string;
+  mode?: ProjectMode;
   labelIds: string[];
   epochs: number;
   accuracy: number;
@@ -49,6 +87,8 @@ export interface ProjectManifest {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /** Fixed when the project is created. Version 1 manifests are "single". */
+  mode: ProjectMode;
   labels: Label[];
   images: ImageRecord[];
   model: ModelMeta | null;
@@ -70,6 +110,8 @@ export interface ProjectSummary {
 /** Serialized dense head, stored at model/head.json inside the bundle. */
 export interface StoredHead {
   formatVersion: number;
+  /** Absent on heads written before multi mode existed, which are all softmax. */
+  mode?: ProjectMode;
   labelIds: string[];
   hiddenUnits: number;
   featureSize: number;
@@ -84,7 +126,11 @@ export const DEFAULT_SETTINGS: TrainSettings = {
   validationSplit: 0.15,
 };
 
-export function newManifest(name: string, appVersion: string): ProjectManifest {
+export function newManifest(
+  name: string,
+  appVersion: string,
+  mode: ProjectMode = "single",
+): ProjectManifest {
   const now = new Date().toISOString();
   return {
     format: "belo-project",
@@ -93,11 +139,30 @@ export function newManifest(name: string, appVersion: string): ProjectManifest {
     name,
     createdAt: now,
     updatedAt: now,
+    mode,
     labels: [],
     images: [],
     model: null,
     checkpoint: null,
     settings: { ...DEFAULT_SETTINGS },
+  };
+}
+
+/**
+ * Brings a manifest read from disk up to the current schema. The only defaults
+ * that matter are mode "single" and, in multi mode, a label set derived from the
+ * old single labelId, so a version 1 project behaves exactly as it did before.
+ */
+export function migrateManifest(raw: ProjectManifest): ProjectManifest {
+  const mode: ProjectMode = raw.mode === "multi" ? "multi" : "single";
+  return {
+    ...raw,
+    formatVersion: FORMAT_VERSION,
+    mode,
+    checkpoint: raw.checkpoint ?? null,
+    settings: { ...DEFAULT_SETTINGS, ...raw.settings },
+    labels: raw.labels ?? [],
+    images: (raw.images ?? []).map((image) => withLabels(image, labelsOf(image), mode)),
   };
 }
 

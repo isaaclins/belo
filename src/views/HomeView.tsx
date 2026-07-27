@@ -3,7 +3,20 @@ import { ArrowRight, FolderOpen, Plus, Stack, Trash, Circuitry } from "@phosphor
 import { useStore } from "../lib/store";
 import { Modal } from "../components/ui";
 import { storage } from "../lib/storage";
-import type { ProjectSummary } from "../lib/types";
+import type { ProjectMode, ProjectSummary } from "../lib/types";
+
+const MODES: { id: ProjectMode; title: string; text: string }[] = [
+  {
+    id: "single",
+    title: "One label per image",
+    text: "Every image belongs to exactly one label and the model picks a single winner.",
+  },
+  {
+    id: "multi",
+    title: "Many labels per image",
+    text: "An image can be X and Y but not Z. Each label gets its own yes or no.",
+  },
+];
 
 function relativeTime(iso: string): string {
   if (!iso) return "never opened";
@@ -55,11 +68,13 @@ export function HomeView() {
   const openProjectDialog = useStore((s) => s.openProjectDialog);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
+  const [mode, setMode] = useState<ProjectMode>("single");
 
   const submit = () => {
     setNaming(false);
-    void createProject(name);
+    void createProject(name, mode);
     setName("");
+    setMode("single");
   };
 
   return (
@@ -155,6 +170,25 @@ export function HomeView() {
                 ? "Saved in Belo's on-device documents"
                 : `Saved as a .belo folder in ${projectsDir ?? "your documents folder"}`}
             </span>
+          </div>
+
+          <div className="field">
+            <span className="field__label">Classification mode</span>
+            <div className="modepick">
+              {MODES.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`modepick__opt${mode === option.id ? " modepick__opt--on" : ""}`}
+                  aria-pressed={mode === option.id}
+                  onClick={() => setMode(option.id)}
+                >
+                  <span className="modepick__title">{option.title}</span>
+                  <span className="modepick__text">{option.text}</span>
+                </button>
+              ))}
+            </div>
+            <span className="field__hint">This is fixed once the project exists.</span>
           </div>
         </Modal>
       ) : null}

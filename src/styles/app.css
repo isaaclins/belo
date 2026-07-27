@@ -137,6 +137,14 @@
   color: var(--accent);
 }
 
+.topbar__mode {
+  gap: 0;
+  background: transparent;
+  color: var(--paper);
+  border-color: var(--ink-soft);
+  white-space: nowrap;
+}
+
 .retrainflag {
   display: inline-flex;
   align-items: center;
@@ -589,6 +597,12 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Some, but not all, of the selected images carry this label. */
+.chip--part {
+  border-style: dashed;
+  opacity: 0.72;
+}
+
 .drop {
   position: relative;
   min-height: 0;
@@ -664,6 +678,24 @@
   background: var(--accent-2);
   color: #fff;
   border: 2px solid var(--ink);
+}
+
+/* Multi label projects show every label an image carries, top right. */
+.tile__labels {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--panel);
+  border: 2px solid var(--ink);
+}
+
+.dot--mini {
+  width: 9px;
+  height: 9px;
+  border-width: 1px;
 }
 
 .tile__tag {
@@ -903,6 +935,11 @@
   gap: 6px;
 }
 
+.verdict__row--wrap {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
 .verdict__name {
   overflow: hidden;
   font-weight: 700;
@@ -1052,6 +1089,15 @@
   gap: var(--s2);
 }
 
+/* Multi label adds an explicit yes or no per row, since nothing wins. */
+.scores--multi .score {
+  grid-template-columns: 12px minmax(64px, 130px) 1fr 46px 44px;
+}
+
+.score__flag {
+  justify-content: center;
+}
+
 .score--top .score__name,
 .score--top .score__val {
   font-weight: 700;
@@ -1126,8 +1172,14 @@
   .topbar__sep,
   .savestate__label,
   .retrainflag__label,
+  .topbar__mode-word,
   .topbar__close span {
     display: none;
+  }
+
+  .topbar__mode {
+    padding: 3px 5px;
+    font-size: 10px;
   }
 
   .retrainflag {
@@ -1428,6 +1480,10 @@
 
   .score {
     grid-template-columns: 12px minmax(54px, 94px) 1fr 42px;
+  }
+
+  .scores--multi .score {
+    grid-template-columns: 12px minmax(54px, 94px) 1fr 42px 40px;
   }
 
   .card__head {

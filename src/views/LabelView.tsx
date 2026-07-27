@@ -16,7 +16,7 @@ import { EmptyState, Modal, swatch } from "../components/ui";
 import { filesFromDataTransfer } from "../lib/images";
 import { storage } from "../lib/storage";
 import { CaptureModal } from "./CaptureModal";
-import type { ImageRecord } from "../lib/types";
+import { hasLabel, labelsOf, type ImageRecord } from "../lib/types";
 
 const UNLABELED = "__unlabeled__";
 
@@ -32,6 +32,7 @@ export function LabelView() {
   const importImages = useStore((s) => s.importImages);
   const importFolder = useStore((s) => s.importFolder);
   const moveImages = useStore((s) => s.moveImages);
+  const toggleImageLabels = useStore((s) => s.toggleImageLabels);
   const removeImages = useStore((s) => s.removeImages);
   const toast = useStore((s) => s.toast);
 
@@ -44,18 +45,30 @@ export function LabelView() {
 
   const labels = manifest?.labels ?? [];
   const images = manifest?.images ?? [];
+  const multi = manifest?.mode === "multi";
   const bucket = activeLabelId ?? UNLABELED;
   const activeLabel = labels.find((l) => l.id === activeLabelId) ?? null;
 
   const shown = useMemo<ImageRecord[]>(() => {
     const target = bucket === UNLABELED ? null : bucket;
-    return images.filter((img) => img.labelId === target).slice().reverse();
+    return images
+      .filter((img) => (target === null ? labelsOf(img).length === 0 : hasLabel(img, target)))
+      .slice()
+      .reverse();
   }, [images, bucket]);
 
-  const unlabeledCount = images.filter((img) => img.labelId === null).length;
-  const countFor = (id: string) => images.filter((img) => img.labelId === id).length;
+  const unlabeledCount = images.filter((img) => labelsOf(img).length === 0).length;
+  const countFor = (id: string) => images.filter((img) => hasLabel(img, id)).length;
+  const sharedWith = (id: string) =>
+    selection.filter((imageId) => {
+      const image = images.find((img) => img.id === imageId);
+      return image ? hasLabel(image, id) : false;
+    }).length;
 
   const targetLabelId = bucket === UNLABELED ? null : bucket;
+  const soleCount = activeLabel
+    ? images.filter((img) => hasLabel(img, activeLabel.id) && labelsOf(img).length === 1).length
+    : 0;
 
   const onNewLabel = () => {
     const name = `Label ${labels.length + 1}`;
@@ -222,23 +235,41 @@ export function LabelView() {
         {selection.length > 0 ? (
           <div className="seltools">
             <span className="eyebrow">{selection.length} selected</span>
-            <span className="seltools__label">Move to</span>
+            <span className="seltools__label">{multi ? "Labels" : "Move to"}</span>
             <div className="seltools__chips">
-              {labels
-                .filter((label) => label.id !== activeLabelId)
-                .map((label) => (
-                  <button
-                    key={label.id}
-                    className="chip"
-                    style={{ background: swatch(label.color) }}
-                    onClick={() => {
-                      moveImages(selection, label.id);
-                      setSelection([]);
-                    }}
-                  >
-                    {label.name}
-                  </button>
-                ))}
+              {multi
+                ? labels.map((label) => {
+                    const on = sharedWith(label.id) === selection.length;
+                    const some = !on && sharedWith(label.id) > 0;
+                    return (
+                      <button
+                        key={label.id}
+                        className={`chip${on ? " chip--on" : some ? " chip--part" : ""}`}
+                        style={on || some ? { background: swatch(label.color) } : undefined}
+                        aria-pressed={on}
+                        title={on ? `Remove ${label.name}` : `Add ${label.name}`}
+                        onClick={() => toggleImageLabels(selection, label.id)}
+                      >
+                        {on ? <Check size={13} weight="bold" /> : <Plus size={13} weight="bold" />}
+                        {label.name}
+                      </button>
+                    );
+                  })
+                : labels
+                    .filter((label) => label.id !== activeLabelId)
+                    .map((label) => (
+                      <button
+                        key={label.id}
+                        className="chip"
+                        style={{ background: swatch(label.color) }}
+                        onClick={() => {
+                          moveImages(selection, label.id);
+                          setSelection([]);
+                        }}
+                      >
+                        {label.name}
+                      </button>
+                    ))}
               {bucket !== UNLABELED ? (
                 <button
                   className="chip chip--ghost"
@@ -247,7 +278,7 @@ export function LabelView() {
                     setSelection([]);
                   }}
                 >
-                  Unlabeled
+                  {multi ? "Clear all labels" : "Unlabeled"}
                 </button>
               ) : null}
             </div>
@@ -324,6 +355,20 @@ export function LabelView() {
                     ) : null}
                     {image.source === "capture" ? <span className="tile__tag">cam</span> : null}
                     {image.source === "feedback" ? <span className="tile__tag">fix</span> : null}
+                    {multi && labelsOf(image).length > 1 ? (
+                      <span className="tile__labels">
+                        {labelsOf(image).map((id) => (
+                          <span
+                            key={id}
+                            className="dot dot--mini"
+                            title={labels.find((l) => l.id === id)?.name ?? ""}
+                            style={{
+                              background: swatch(labels.find((l) => l.id === id)?.color ?? 0),
+                            }}
+                          />
+                        ))}
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}
@@ -359,11 +404,19 @@ export function LabelView() {
             </>
           }
         >
-          <p>
-            This removes the label and deletes its {countFor(activeLabel.id)} image
-            {countFor(activeLabel.id) === 1 ? "" : "s"} from the project folder. It cannot be
-            undone.
-          </p>
+          {multi ? (
+            <p>
+              This removes the label from {countFor(activeLabel.id)} image
+              {countFor(activeLabel.id) === 1 ? "" : "s"} and deletes the {soleCount} that carry no
+              other label. It cannot be undone.
+            </p>
+          ) : (
+            <p>
+              This removes the label and deletes its {countFor(activeLabel.id)} image
+              {countFor(activeLabel.id) === 1 ? "" : "s"} from the project folder. It cannot be
+              undone.
+            </p>
+          )}
         </Modal>
       ) : null}
     </div>

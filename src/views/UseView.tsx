@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Brain,
+  Check,
   CircleNotch,
   Image as ImageIcon,
   Play,
@@ -9,6 +10,7 @@ import {
   VideoCamera,
   Warning,
 } from "@phosphor-icons/react";
+import { MULTI_THRESHOLD } from "../lib/types";
 import { useStore, type Prediction } from "../lib/store";
 import { useWebcam } from "../lib/useWebcam";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
@@ -17,7 +19,7 @@ import { storage } from "../lib/storage";
 
 const TICK_MS = 220;
 
-function Scores({ prediction }: { prediction: Prediction | null }) {
+function Scores({ prediction, multi }: { prediction: Prediction | null; multi: boolean }) {
   const manifest = useStore((s) => s.manifest);
   if (!prediction) return null;
   // Label creation order, never score order: a list that reshuffles every frame
@@ -28,31 +30,85 @@ function Scores({ prediction }: { prediction: Prediction | null }) {
   }));
 
   return (
-    <ul className="scores">
-      {rows.map(({ row, label }) => (
-        <li key={row.labelId} className={row.labelId === prediction.labelId ? "score score--top" : "score"}>
-          <span className="dot" style={{ background: swatch(label?.color ?? 0) }} />
-          <span className="score__name">{label?.name ?? "removed label"}</span>
-          <Meter value={row.score} />
-          <span className="mono score__val">{pct(row.score)}</span>
-        </li>
-      ))}
+    <ul className={multi ? "scores scores--multi" : "scores"}>
+      {rows.map(({ row, label }) => {
+        // Multi mode: each label answers on its own, there is no winner.
+        const on = multi ? row.score >= MULTI_THRESHOLD : row.labelId === prediction.labelId;
+        return (
+          <li key={row.labelId} className={on ? "score score--top" : "score"}>
+            <span className="dot" style={{ background: swatch(label?.color ?? 0) }} />
+            <span className="score__name">{label?.name ?? "removed label"}</span>
+            <Meter value={row.score} />
+            <span className="mono score__val">{pct(row.score)}</span>
+            {multi ? (
+              <span className={`badge ${on ? "badge--ok" : "badge--idle"} score__flag`}>
+                {on ? "yes" : "no"}
+              </span>
+            ) : null}
+          </li>
+        );
+      })}
     </ul>
   );
 }
 
 function FeedbackBar({
   prediction,
+  multi,
   onTeach,
 }: {
   prediction: Prediction | null;
-  onTeach: (labelId: string) => void;
+  multi: boolean;
+  onTeach: (labelIds: string[]) => void;
 }) {
   const manifest = useStore((s) => s.manifest);
+  const [picked, setPicked] = useState<string[]>([]);
   if (!prediction || !manifest) return null;
 
-  // Fixed order and fixed captions. The predicted label is highlighted in place
-  // so a button never moves out from under a finger mid tap.
+  // Fixed order and fixed captions in both modes. The button under a finger
+  // never moves or changes meaning while the camera runs.
+  if (multi) {
+    const toggle = (id: string) =>
+      setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    return (
+      <div className="feedback">
+        <span className="eyebrow">Teach it from this frame</span>
+        <div className="feedback__chips">
+          {manifest.labels.map((label) => {
+            const on = picked.includes(label.id);
+            return (
+              <button
+                key={label.id}
+                className={`chip chip--teach${on ? " chip--on" : ""}`}
+                style={on ? { background: swatch(label.color) } : undefined}
+                aria-pressed={on}
+                onClick={() => toggle(label.id)}
+              >
+                {on ? (
+                  <Check size={14} weight="bold" />
+                ) : (
+                  <span className="dot" style={{ background: swatch(label.color) }} />
+                )}
+                This is {label.name}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          className="btn btn--sm btn--go"
+          disabled={picked.length === 0}
+          onClick={() => {
+            onTeach(picked);
+            setPicked([]);
+          }}
+        >
+          <PlusCircle size={15} weight="bold" /> Add frame with {picked.length} label
+          {picked.length === 1 ? "" : "s"}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="feedback">
       <span className="eyebrow">Teach it from this frame</span>
@@ -65,7 +121,7 @@ function FeedbackBar({
               className={`chip chip--teach${top ? " chip--on" : ""}`}
               style={top ? { background: swatch(label.color) } : undefined}
               aria-pressed={top}
-              onClick={() => onTeach(label.id)}
+              onClick={() => onTeach([label.id])}
             >
               {top ? (
                 <PlusCircle size={14} weight="bold" />
@@ -171,23 +227,27 @@ export function UseView() {
     }
   };
 
-  const teachFromVideo = (labelId: string) => {
+  const namesFor = (labelIds: string[]) =>
+    labelIds
+      .map((id) => manifest?.labels.find((l) => l.id === id)?.name ?? "the label")
+      .join(" + ") || "no label";
+
+  const teachFromVideo = (labelIds: string[]) => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return;
-    void addFromDrawable(toSquareCanvas(video), labelId, "feedback");
-    const name = manifest?.labels.find((l) => l.id === labelId)?.name ?? "the label";
-    toast(`Frame added to ${name}. It retrains itself in a moment.`, "good");
+    void addFromDrawable(toSquareCanvas(video), labelIds, "feedback");
+    toast(`Frame added to ${namesFor(labelIds)}. It retrains itself in a moment.`, "good");
   };
 
-  const teachFromStill = (labelId: string) => {
+  const teachFromStill = (labelIds: string[]) => {
     const img = stillRef.current;
     if (!img) return;
-    void addFromDrawable(toSquareCanvas(img), labelId, "feedback");
-    const name = manifest?.labels.find((l) => l.id === labelId)?.name ?? "the label";
-    toast(`Image added to ${name}. It retrains itself in a moment.`, "good");
+    void addFromDrawable(toSquareCanvas(img), labelIds, "feedback");
+    toast(`Image added to ${namesFor(labelIds)}. It retrains itself in a moment.`, "good");
   };
 
   if (!manifest) return null;
+  const multi = manifest.mode === "multi";
 
   if (!hasModel) {
     return (
@@ -209,6 +269,13 @@ export function UseView() {
   }
 
   const topLabel = manifest.labels.find((l) => l.id === livePrediction?.labelId);
+  // Multi mode has no winner, so the overlay lists everything above threshold.
+  const liveOnLabels =
+    livePrediction?.scores.filter((row) => row.score >= MULTI_THRESHOLD).map((row) => row.labelId) ??
+    [];
+  const liveOnNames = liveOnLabels
+    .map((id) => manifest.labels.find((l) => l.id === id)?.name ?? "?")
+    .join(" + ");
 
   return (
     <div className="use">
@@ -249,17 +316,36 @@ export function UseView() {
           ) : null}
 
           {live && status === "live" && livePrediction ? (
-            <div className="verdictbar" style={{ background: swatch(topLabel?.color ?? 0) }}>
-              <span className="verdictbar__name">{topLabel?.name ?? "unknown"}</span>
-              <span className="verdictbar__pct mono">{pct(livePrediction.confidence)}</span>
-            </div>
+            multi ? (
+              <div
+                className="verdictbar"
+                style={{
+                  background:
+                    liveOnLabels.length === 0
+                      ? "var(--paper-deep)"
+                      : swatch(
+                          manifest.labels.find((l) => l.id === liveOnLabels[0])?.color ?? 0,
+                        ),
+                }}
+              >
+                <span className="verdictbar__name">{liveOnNames || "none of them"}</span>
+                <span className="verdictbar__pct mono">
+                  {liveOnLabels.length}/{livePrediction.scores.length}
+                </span>
+              </div>
+            ) : (
+              <div className="verdictbar" style={{ background: swatch(topLabel?.color ?? 0) }}>
+                <span className="verdictbar__name">{topLabel?.name ?? "unknown"}</span>
+                <span className="verdictbar__pct mono">{pct(livePrediction.confidence)}</span>
+              </div>
+            )
           ) : null}
         </div>
 
         {livePrediction ? (
           <div className="card__body stack">
-            <Scores prediction={livePrediction} />
-            <FeedbackBar prediction={livePrediction} onTeach={teachFromVideo} />
+            <Scores prediction={livePrediction} multi={multi} />
+            <FeedbackBar prediction={livePrediction} multi={multi} onTeach={teachFromVideo} />
           </div>
         ) : null}
       </section>
@@ -317,8 +403,8 @@ export function UseView() {
 
         {stillPrediction ? (
           <div className="card__body stack">
-            <Scores prediction={stillPrediction} />
-            <FeedbackBar prediction={stillPrediction} onTeach={teachFromStill} />
+            <Scores prediction={stillPrediction} multi={multi} />
+            <FeedbackBar prediction={stillPrediction} multi={multi} onTeach={teachFromStill} />
           </div>
         ) : null}
       </section>
