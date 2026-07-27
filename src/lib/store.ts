@@ -163,6 +163,8 @@ interface State {
     origin: ImageSource,
   ) => Promise<void>;
   moveImages: (imageIds: string[], labelId: string | null) => void;
+  /** Train view: relabels a scored image to what the model read and refreshes the results. */
+  acceptPrediction: (imageId: string) => void;
   /** Multi mode: adds the label where it is missing, removes it where it is not. */
   toggleImageLabels: (imageIds: string[], labelId: string) => void;
   removeImages: (imageIds: string[]) => Promise<void>;
@@ -915,6 +917,45 @@ export const useStore = create<State>((set, get) => {
         ),
       });
       markStale();
+    },
+
+    // The results list is a snapshot of one run, so relabeling an image has to
+    // patch the verdict and the per label stats too. Without that the card sits
+    // in the wrong bucket with its old label until the next full training run.
+    acceptPrediction(imageId) {
+      const { manifest, train } = get();
+      if (!manifest) return;
+      const verdict = train.verdicts.find((v) => v.imageId === imageId);
+      if (!verdict) return;
+      const target =
+        manifest.mode === "multi"
+          ? verdict.predictedLabelIds
+          : verdict.predictedLabelId
+            ? [verdict.predictedLabelId]
+            : [];
+      if (target.length === 0) return;
+
+      touch({
+        images: manifest.images.map((img) =>
+          img.id === imageId ? withLabels(img, target, manifest.mode) : img,
+        ),
+      });
+      markStale();
+
+      const verdicts = train.verdicts.map((v) =>
+        v.imageId === imageId
+          ? { ...v, actualLabelId: target[0] ?? "", actualLabelIds: target, correct: true }
+          : v,
+      );
+      set({
+        train: {
+          ...get().train,
+          verdicts,
+          labelStats: summarizeLabels(verdicts, get().modelLabelIds, manifest.mode),
+        },
+      });
+      // Same rule as a Use view correction: one debounced run folds in a burst.
+      scheduleAutoRetrain();
     },
 
     toggleImageLabels(imageIds, labelId) {

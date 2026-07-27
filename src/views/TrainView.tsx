@@ -52,7 +52,7 @@ export function TrainView() {
   const startTraining = useStore((s) => s.startTraining);
   const stopTraining = useStore((s) => s.stopTraining);
   const updateSettings = useStore((s) => s.updateSettings);
-  const moveImages = useStore((s) => s.moveImages);
+  const acceptPrediction = useStore((s) => s.acceptPrediction);
   const setView = useStore((s) => s.setView);
   const hasModel = useStore((s) => s.hasModel);
   const stale = useStore((s) => s.stale);
@@ -275,12 +275,22 @@ export function TrainView() {
                             {verdict.correct ? (
                               <span className="badge badge--ok">{pct(verdict.confidence)}</span>
                             ) : (
-                              <span className="verdict__guess mono">
-                                read as{" "}
-                                {verdict.predictedLabelIds.length === 0
-                                  ? "none"
-                                  : verdict.predictedLabelIds.map(nameFor).join(" + ")}
-                              </span>
+                              <>
+                                <span className="verdict__guess mono">
+                                  read as{" "}
+                                  {verdict.predictedLabelIds.length === 0
+                                    ? "none"
+                                    : verdict.predictedLabelIds.map(nameFor).join(" + ")}
+                                </span>
+                                {verdict.predictedLabelIds.length > 0 ? (
+                                  <button
+                                    className="btn btn--sm"
+                                    onClick={() => acceptPrediction(verdict.imageId)}
+                                  >
+                                    Move to {verdict.predictedLabelIds.map(nameFor).join(" + ")}
+                                  </button>
+                                ) : null}
+                              </>
                             )}
                           </>
                         ) : (
@@ -302,9 +312,7 @@ export function TrainView() {
                                 </span>
                                 <button
                                   className="btn btn--sm"
-                                  onClick={() =>
-                                    moveImages([verdict.imageId], verdict.predictedLabelId)
-                                  }
+                                  onClick={() => acceptPrediction(verdict.imageId)}
                                 >
                                   Move to {nameFor(verdict.predictedLabelId)}
                                 </button>
