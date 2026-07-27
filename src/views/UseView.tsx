@@ -76,6 +76,7 @@ function FeedbackBar({
 
 export function UseView() {
   const hasModel = useStore((s) => s.hasModel);
+  const stale = useStore((s) => s.stale);
   const manifest = useStore((s) => s.manifest);
   const predict = useStore((s) => s.predict);
   const addFromDrawable = useStore((s) => s.addFromDrawable);
@@ -233,10 +234,12 @@ export function UseView() {
           ) : null}
         </div>
 
-        <div className="card__body stack">
-          <Scores prediction={livePrediction} />
-          <FeedbackBar prediction={livePrediction} onTeach={teachFromVideo} />
-        </div>
+        {livePrediction ? (
+          <div className="card__body stack">
+            <Scores prediction={livePrediction} />
+            <FeedbackBar prediction={livePrediction} onTeach={teachFromVideo} />
+          </div>
+        ) : null}
       </section>
 
       <section className="card use__still">
@@ -285,11 +288,19 @@ export function UseView() {
           {thinking ? <div className="use__veil">Thinking</div> : null}
         </div>
 
-        <div className="card__body stack">
-          <Scores prediction={stillPrediction} />
-          <FeedbackBar prediction={stillPrediction} onTeach={teachFromStill} />
-        </div>
+        {stillPrediction ? (
+          <div className="card__body stack">
+            <Scores prediction={stillPrediction} />
+            <FeedbackBar prediction={stillPrediction} onTeach={teachFromStill} />
+          </div>
+        ) : null}
       </section>
+
+      {stale ? (
+        <p className="use__flag">
+          New images were added since training. The classifier below still runs the older model.
+        </p>
+      ) : null}
     </div>
   );
 }

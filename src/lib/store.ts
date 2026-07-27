@@ -94,6 +94,8 @@ interface State {
   activeLabelId: string | null;
   train: TrainState;
   hasModel: boolean;
+  /** True when the dataset changed after the last training run. */
+  stale: boolean;
   modelLabelIds: string[];
 
   boot: () => Promise<void>;
@@ -173,10 +175,17 @@ export const useStore = create<State>((set, get) => {
     }, 500);
   };
 
+  // A changed label set makes the trained head structurally invalid, so it has
+  // to go. Everything else only makes the model out of date, which is worth a
+  // warning but not worth throwing away a working classifier.
   const dropModel = () => {
     head?.dispose();
     head = null;
-    set({ hasModel: false, modelLabelIds: [] });
+    set({ hasModel: false, modelLabelIds: [], stale: false });
+  };
+
+  const markStale = () => {
+    if (get().hasModel) set({ stale: true });
   };
 
   /** Loads and caches the embedding for one stored image. */
@@ -219,6 +228,7 @@ export const useStore = create<State>((set, get) => {
     activeLabelId: null,
     train: idleTrainState,
     hasModel: false,
+    stale: false,
     modelLabelIds: [],
 
     async boot() {
@@ -314,7 +324,7 @@ export const useStore = create<State>((set, get) => {
           const restored = deserializeHead(parsed, manifest.settings);
           if (restored) {
             head = restored;
-            set({ hasModel: true, modelLabelIds: parsed.labelIds });
+            set({ hasModel: true, stale: false, modelLabelIds: parsed.labelIds });
           }
         }
       } catch (err) {
@@ -450,8 +460,8 @@ export const useStore = create<State>((set, get) => {
       }
       set({ busy: null });
       if (added.length > 0) {
-        touch({ images: [...get().manifest!.images, ...added], model: null });
-        dropModel();
+        touch({ images: [...get().manifest!.images, ...added] });
+        markStale();
       }
       const skipped = files.length - added.length;
       if (skipped > 0) get().toast(`${skipped} file(s) could not be read`, "bad");
@@ -475,8 +485,8 @@ export const useStore = create<State>((set, get) => {
       }
       set({ busy: null });
       if (added.length > 0) {
-        touch({ images: [...get().manifest!.images, ...added], model: null });
-        dropModel();
+        touch({ images: [...get().manifest!.images, ...added] });
+        markStale();
       }
       return added.length;
     },
@@ -487,8 +497,8 @@ export const useStore = create<State>((set, get) => {
       try {
         const jpeg = normalizeToJpegBase64(source);
         const record = await writeImageRecord(jpeg, labelId, origin);
-        touch({ images: [...get().manifest!.images, record], model: null });
-        if (origin !== "feedback") dropModel();
+        touch({ images: [...get().manifest!.images, record] });
+        markStale();
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
@@ -497,12 +507,11 @@ export const useStore = create<State>((set, get) => {
     moveImages(imageIds, labelId) {
       const manifest = get().manifest;
       if (!manifest) return;
-      const set0 = new Set(imageIds);
+      const moved = new Set(imageIds);
       touch({
-        images: manifest.images.map((img) => (set0.has(img.id) ? { ...img, labelId } : img)),
-        model: null,
+        images: manifest.images.map((img) => (moved.has(img.id) ? { ...img, labelId } : img)),
       });
-      dropModel();
+      markStale();
     },
 
     async removeImages(imageIds) {
@@ -518,9 +527,8 @@ export const useStore = create<State>((set, get) => {
       doomed.forEach((img) => featureCache.delete(img.id));
       touch({
         images: manifest.images.filter((img) => !imageIds.includes(img.id)),
-        model: null,
       });
-      dropModel();
+      markStale();
     },
 
     updateSettings(patch) {
@@ -634,6 +642,7 @@ export const useStore = create<State>((set, get) => {
 
         set((s) => ({
           hasModel: true,
+          stale: false,
           modelLabelIds: labelIds,
           train: {
             ...s.train,

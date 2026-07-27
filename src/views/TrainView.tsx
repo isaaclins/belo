@@ -45,7 +45,9 @@ export function TrainView() {
   const updateSettings = useStore((s) => s.updateSettings);
   const moveImages = useStore((s) => s.moveImages);
   const setView = useStore((s) => s.setView);
-  const [filter, setFilter] = useState<Filter>("wrong");
+  const hasModel = useStore((s) => s.hasModel);
+  const stale = useStore((s) => s.stale);
+  const [pickedFilter, setPickedFilter] = useState<Filter | null>(null);
 
   const labels = manifest?.labels ?? [];
   const images = manifest?.images ?? [];
@@ -68,13 +70,17 @@ export function TrainView() {
     });
   }, [train.verdicts, usableLabels]);
 
+  const wrongCount = train.verdicts.filter((v) => !v.correct).length;
+  // Land on the mistakes when there are any, otherwise show the full set
+  // instead of an empty bucket.
+  const filter: Filter = pickedFilter ?? (wrongCount > 0 ? "wrong" : "all");
+  const setFilter = setPickedFilter;
+
   const visible = useMemo(() => {
     if (filter === "correct") return train.verdicts.filter((v) => v.correct);
     if (filter === "wrong") return train.verdicts.filter((v) => !v.correct);
     return train.verdicts;
   }, [train.verdicts, filter]);
-
-  const wrongCount = train.verdicts.filter((v) => !v.correct).length;
   const progress =
     train.phase === "training"
       ? train.total === 0
@@ -100,7 +106,11 @@ export function TrainView() {
       <section className="train__stage card">
         <div className="train__status">
           <span className="eyebrow">
-            {train.phase === "idle" ? "Not trained yet" : train.message || train.phase}
+            {train.phase === "idle"
+              ? hasModel
+                ? "Trained in an earlier session"
+                : "Not trained yet"
+              : train.message || train.phase}
           </span>
           <h2 className="train__headline">
             {train.phase === "done"
@@ -118,6 +128,12 @@ export function TrainView() {
               ? `${labeledCount} labeled images across ${usableLabels.length} labels. Features come from a frozen MobileNet, only the small head learns.`
               : "You need at least two labels that both hold images. Head back to the label view and collect a few more."}
           </p>
+
+          {stale ? (
+            <p className="train__flag">
+              The dataset changed since the last run. Train again to fold the new images in.
+            </p>
+          ) : null}
 
           <Meter value={progress} large />
 

@@ -37,8 +37,14 @@ export function Modal({
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    // Move focus into the dialog so keyboard users are not stranded outside.
-    ref.current?.querySelector<HTMLElement>("input, button, select")?.focus();
+    // Move focus into the dialog, preferring the first real control over the
+    // close button that sits earlier in the DOM.
+    const scope = ref.current;
+    const target =
+      scope?.querySelector<HTMLElement>("input, select, textarea") ??
+      scope?.querySelector<HTMLElement>(".modal__body button") ??
+      scope?.querySelector<HTMLElement>("button");
+    target?.focus();
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 

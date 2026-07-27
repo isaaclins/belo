@@ -764,6 +764,20 @@
   color: var(--ink-soft);
 }
 
+.train__flag,
+.use__flag {
+  padding: var(--s2) var(--s3);
+  background: var(--accent);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.use__flag {
+  grid-column: 1 / -1;
+}
+
 .train__metrics {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -908,7 +922,8 @@
 .use__live,
 .use__still {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto;
+  align-content: start;
   min-width: 0;
 }
 
