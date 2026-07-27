@@ -625,6 +625,34 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Held down for continuous capture: locked in place, counting up, flashing
+   once per frame. No blur, no fade, same hard language as the rest. */
+.chip--holding,
+.btn.chip--holding {
+  background: var(--accent-3);
+  border-width: var(--border-w);
+  box-shadow: var(--shadow-sm);
+  transform: translate(2px, 2px);
+}
+
+.chip--pulse,
+.btn.chip--pulse {
+  background: var(--accent);
+  outline: var(--border-w-thin) solid var(--ink);
+  outline-offset: 2px;
+}
+
+.chip__tally {
+  margin-left: 4px;
+  padding: 1px 5px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Some, but not all, of the selected images carry this label. */
 .chip--part {
   border-style: dashed;
@@ -1170,6 +1198,14 @@
   gap: var(--s2);
   padding-top: var(--s3);
   border-top: var(--border-w-thin) dashed var(--ink);
+}
+
+.feedback__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
 }
 
 .feedback__chips {

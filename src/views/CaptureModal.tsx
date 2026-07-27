@@ -5,9 +5,10 @@ import { useWebcam } from "../lib/useWebcam";
 import { toSquareCanvas } from "../lib/images";
 import { Modal, swatch } from "../components/ui";
 import { CameraPicker } from "../components/CameraPicker";
+import { RatePicker } from "../components/RatePicker";
+import { captureIntervalMs, MAX_IN_FLIGHT, useCaptureRate } from "../lib/captureRate";
 import type { Label } from "../lib/types";
 
-const BURST_INTERVAL_MS = 130;
 const STRIP_SIZE = 14;
 
 export function CaptureModal({ label, onClose }: { label: Label; onClose: () => void }) {
@@ -17,12 +18,20 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
   const [strip, setStrip] = useState<string[]>([]);
   const [bursting, setBursting] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [rate] = useCaptureRate();
+  // Writes that have not landed yet. A slow disk drops frames here instead of
+  // building a queue that keeps growing after the button is released.
+  const inFlight = useRef(0);
 
   const shoot = useCallback(() => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return;
+    if (inFlight.current >= MAX_IN_FLIGHT) return;
     const canvas = toSquareCanvas(video);
-    void addFromDrawable(canvas, label.id, "capture");
+    inFlight.current += 1;
+    void addFromDrawable(canvas, label.id, "capture").finally(() => {
+      inFlight.current -= 1;
+    });
     setCount((n) => n + 1);
     setStrip((prev) => [canvas.toDataURL("image/jpeg", 0.6), ...prev].slice(0, STRIP_SIZE));
   }, [addFromDrawable, label.id, videoRef]);
@@ -31,8 +40,8 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
     if (timer.current) return;
     setBursting(true);
     shoot();
-    timer.current = setInterval(shoot, BURST_INTERVAL_MS);
-  }, [shoot]);
+    timer.current = setInterval(shoot, captureIntervalMs(rate));
+  }, [rate, shoot]);
 
   const stopBurst = useCallback(() => {
     if (timer.current) clearInterval(timer.current);
@@ -120,8 +129,9 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
             <Camera size={20} weight="bold" />
             {bursting ? "Recording" : "Hold to capture"}
           </button>
+          <RatePicker />
           <p className="field__hint">
-            Hold the button or the space bar and move the object around. Roughly 8 frames per second.
+            Hold the button or the space bar and move the object around, {rate} frames per second.
           </p>
 
           <CameraPicker

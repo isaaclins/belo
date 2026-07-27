@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Brain,
   Check,
@@ -13,8 +13,11 @@ import {
 import { MULTI_THRESHOLD } from "../lib/types";
 import { useStore, type Prediction } from "../lib/store";
 import { useWebcam } from "../lib/useWebcam";
+import { useHoldRepeat } from "../lib/useHoldRepeat";
 import { AttentionOverlay } from "../components/AttentionOverlay";
 import { CameraPicker } from "../components/CameraPicker";
+import { RatePicker } from "../components/RatePicker";
+import { captureIntervalMs, MAX_IN_FLIGHT, useCaptureRate } from "../lib/captureRate";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { isImageFile, loadImageElement, toSquareCanvas } from "../lib/images";
 import { storage } from "../lib/storage";
@@ -54,17 +57,75 @@ function Scores({ prediction, multi }: { prediction: Prediction | null; multi: b
   );
 }
 
+/**
+ * One teach button. A tap adds a single frame, holding it keeps adding frames
+ * until it is released, so correcting the model never means spam clicking.
+ * Every frame takes the same path as a single tap; only the toast is held back
+ * until the finger comes up, which is also when the debounced retrain can run.
+ */
+function TeachButton({
+  className,
+  style,
+  pressed,
+  onCapture,
+  onDone,
+  repeat = true,
+  children,
+}: {
+  className: string;
+  style?: CSSProperties;
+  pressed?: boolean;
+  onCapture: () => boolean | void;
+  onDone: (count: number) => void;
+  /** The single image bar has nothing to keep capturing, so it stays a click. */
+  repeat?: boolean;
+  children: ReactNode;
+}) {
+  const [rate] = useCaptureRate();
+  const { holding, count, capped, pulse, handlers } = useHoldRepeat({
+    onFire: onCapture,
+    onEnd: onDone,
+    intervalMs: captureIntervalMs(rate),
+    repeat,
+  });
+
+  return (
+    <button
+      type="button"
+      className={`${className}${holding ? " chip--holding" : ""}${pulse ? " chip--pulse" : ""}`}
+      style={style}
+      aria-pressed={pressed}
+      {...handlers}
+    >
+      {children}
+      {holding ? (
+        <span className="chip__tally mono">{capped ? `+${count} max` : `+${count}`}</span>
+      ) : null}
+    </button>
+  );
+}
+
 function FeedbackBar({
   prediction,
   multi,
   onTeach,
+  onTaught,
+  hold = true,
 }: {
   prediction: Prediction | null;
   multi: boolean;
-  onTeach: (labelIds: string[]) => void;
+  /** Adds one frame. Returns false when there was no frame to take. */
+  onTeach: (labelIds: string[]) => boolean;
+  /** Called once per interaction with the number of frames it added. */
+  onTaught: (labelIds: string[], count: number) => void;
+  /** Whether holding a button keeps capturing. */
+  hold?: boolean;
 }) {
   const manifest = useStore((s) => s.manifest);
   const [picked, setPicked] = useState<string[]>([]);
+  // Held so a burst keeps teaching the set the hold started with.
+  const pickedRef = useRef<string[]>([]);
+  pickedRef.current = picked;
   if (!prediction || !manifest) return null;
 
   // Fixed order and fixed captions in both modes. The button under a finger
@@ -74,7 +135,12 @@ function FeedbackBar({
       setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
     return (
       <div className="feedback">
-        <span className="eyebrow">Teach it from this frame</span>
+        <div className="feedback__head">
+          <span className="eyebrow">
+            {hold ? "Teach it from this frame, or hold to keep adding" : "Teach it from this image"}
+          </span>
+          {hold ? <RatePicker compact /> : null}
+        </div>
         <div className="feedback__chips">
           {manifest.labels.map((label) => {
             const on = picked.includes(label.id);
@@ -96,34 +162,48 @@ function FeedbackBar({
             );
           })}
         </div>
-        <button
-          className="btn btn--sm btn--go"
-          disabled={picked.length === 0}
-          onClick={() => {
-            onTeach(picked);
-            setPicked([]);
-          }}
-        >
-          <PlusCircle size={15} weight="bold" /> Add frame with {picked.length} label
-          {picked.length === 1 ? "" : "s"}
-        </button>
+        {picked.length === 0 ? (
+          <button className="btn btn--sm btn--go" disabled>
+            <PlusCircle size={15} weight="bold" /> Add frame with 0 labels
+          </button>
+        ) : (
+          <TeachButton
+            className="btn btn--sm btn--go"
+            repeat={hold}
+            onCapture={() => onTeach(pickedRef.current)}
+            onDone={(count) => {
+              onTaught(pickedRef.current, count);
+              setPicked([]);
+            }}
+          >
+            <PlusCircle size={15} weight="bold" /> Add frame{picked.length > 0 ? "" : ""} with{" "}
+            {picked.length} label{picked.length === 1 ? "" : "s"}
+          </TeachButton>
+        )}
       </div>
     );
   }
 
   return (
     <div className="feedback">
-      <span className="eyebrow">Teach it from this frame</span>
+      <div className="feedback__head">
+        <span className="eyebrow">
+          {hold ? "Teach it from this frame, or hold to keep adding" : "Teach it from this image"}
+        </span>
+        {hold ? <RatePicker compact /> : null}
+      </div>
       <div className="feedback__chips">
         {manifest.labels.map((label) => {
           const top = label.id === prediction.labelId;
           return (
-            <button
+            <TeachButton
               key={label.id}
               className={`chip chip--teach${top ? " chip--on" : ""}`}
               style={top ? { background: swatch(label.color) } : undefined}
-              aria-pressed={top}
-              onClick={() => onTeach([label.id])}
+              pressed={top}
+              repeat={hold}
+              onCapture={() => onTeach([label.id])}
+              onDone={(count) => onTaught([label.id], count)}
             >
               {top ? (
                 <PlusCircle size={14} weight="bold" />
@@ -131,7 +211,7 @@ function FeedbackBar({
                 <span className="dot" style={{ background: swatch(label.color) }} />
               )}
               This is {label.name}
-            </button>
+            </TeachButton>
           );
         })}
       </div>
@@ -158,6 +238,7 @@ export function UseView() {
     useWebcam(live);
   const [livePrediction, setLivePrediction] = useState<Prediction | null>(null);
 
+  const inFlight = useRef(0);
   const [stillUrl, setStillUrl] = useState<string | null>(null);
   const [stillPrediction, setStillPrediction] = useState<Prediction | null>(null);
   const [dropping, setDropping] = useState(false);
@@ -239,18 +320,30 @@ export function UseView() {
       .map((id) => manifest?.labels.find((l) => l.id === id)?.name ?? "the label")
       .join(" + ") || "no label";
 
+  // One frame per call, no toast: a hold can call this many times and the
+  // report comes once at the end. Frames are dropped rather than queued when
+  // the writes fall behind, which is what keeps 12 fps from piling up.
   const teachFromVideo = (labelIds: string[]) => {
     const video = videoRef.current;
-    if (!video || video.videoWidth === 0) return;
-    void addFromDrawable(toSquareCanvas(video), labelIds, "feedback");
-    toast(`Frame added to ${namesFor(labelIds)}. It retrains itself in a moment.`, "good");
+    if (!video || video.videoWidth === 0) return false;
+    if (inFlight.current >= MAX_IN_FLIGHT) return false;
+    inFlight.current += 1;
+    void addFromDrawable(toSquareCanvas(video), labelIds, "feedback").finally(() => {
+      inFlight.current -= 1;
+    });
+    return true;
   };
 
   const teachFromStill = (labelIds: string[]) => {
     const img = stillRef.current;
-    if (!img) return;
+    if (!img) return false;
     void addFromDrawable(toSquareCanvas(img), labelIds, "feedback");
-    toast(`Image added to ${namesFor(labelIds)}. It retrains itself in a moment.`, "good");
+    return true;
+  };
+
+  const reportTaught = (what: string, labelIds: string[], count: number) => {
+    const many = count > 1 ? `${count} frames` : `1 ${what}`;
+    toast(`${many} added to ${namesFor(labelIds)}. It retrains itself in a moment.`, "good");
   };
 
   if (!manifest) return null;
@@ -384,7 +477,12 @@ export function UseView() {
         {livePrediction ? (
           <div className="card__body stack">
             <Scores prediction={livePrediction} multi={multi} />
-            <FeedbackBar prediction={livePrediction} multi={multi} onTeach={teachFromVideo} />
+            <FeedbackBar
+              prediction={livePrediction}
+              multi={multi}
+              onTeach={teachFromVideo}
+              onTaught={(labelIds, count) => reportTaught("frame", labelIds, count)}
+            />
           </div>
         ) : null}
       </section>
@@ -443,7 +541,13 @@ export function UseView() {
         {stillPrediction ? (
           <div className="card__body stack">
             <Scores prediction={stillPrediction} multi={multi} />
-            <FeedbackBar prediction={stillPrediction} multi={multi} onTeach={teachFromStill} />
+            <FeedbackBar
+              prediction={stillPrediction}
+              multi={multi}
+              hold={false}
+              onTeach={teachFromStill}
+              onTaught={(labelIds, count) => reportTaught("image", labelIds, count)}
+            />
           </div>
         ) : null}
       </section>

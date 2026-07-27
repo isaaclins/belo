@@ -15,11 +15,18 @@ been built on an Android toolchain.
    selection toggles several labels on and off instead of moving between them.
 2. **Train.** One click trains a classifier and reports live progress, training accuracy,
    a holdout score and a per label score. Every image is scored afterwards so you can see
-   exactly which ones the model still gets wrong.
+   exactly which ones the model still gets wrong. **Move to X** on a wrong card accepts what
+   the model read as the true label: the card flips to correct on the spot, the per label
+   panel recounts, and the same debounced background retrain as a Use view correction folds
+   it in.
 3. **Use.** Point the webcam at something and watch the live prediction and confidence
    bars, or drop a single image in for a one-shot verdict. Either way you can confirm or
    correct the prediction, which adds that frame to the dataset and quietly retrains the
-   head a few seconds later. While the camera runs, **Show attention** overlays where the
+   head a few seconds later. Tapping a **This is X** button teaches one frame; holding it
+   keeps teaching frames until you let go, counting up on the button and capping one hold
+   at 60 frames. The **Rate** control next to those buttons picks 2, 4, 8 or 12 frames per
+   second and drives the Label view burst as well, so the app has one capture speed;
+   frames are dropped rather than queued if the disk cannot keep up. While the camera runs, **Show attention** overlays where the
    evidence for the current call sits: a tinted heat map plus one box per label. It reads
    the classifier's own 7x7 feature grid, so it is a coarse hint at roughly a 32 pixel
    resolution and never an object detector. The toggle starts off and is remembered until
@@ -146,7 +153,10 @@ working classifier without retraining.
   next save. A head written without a mode is read as softmax.
 
 New projects are created in `~/Documents/Belo` by default. Any `.belo` folder elsewhere
-can be opened with the file picker.
+can be opened with the file picker. The trash button on a project card deletes the bundle
+itself after a confirmation that names the project and what goes with it, images and
+trained model included. The Rust side refuses to delete anything that is not a `.belo`
+directory holding a `project.json`, and the currently open project cannot be deleted.
 
 ## Development
 
