@@ -10,6 +10,14 @@ body,
   height: 100%;
 }
 
+/* No user zoom anywhere: this is an app window, not a document. Layout still
+   reflows with the window, only pinch, double tap and zoom shortcuts are out. */
+html {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background: var(--paper);
@@ -25,6 +33,7 @@ body {
 body {
   user-select: none;
   cursor: default;
+  touch-action: manipulation;
 }
 
 input,
