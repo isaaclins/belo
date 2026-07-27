@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Camera,
   Check,
@@ -29,6 +29,7 @@ export function LabelView() {
   const renameLabel = useStore((s) => s.renameLabel);
   const deleteLabel = useStore((s) => s.deleteLabel);
   const addFiles = useStore((s) => s.addFiles);
+  const importImages = useStore((s) => s.importImages);
   const importFolder = useStore((s) => s.importFolder);
   const moveImages = useStore((s) => s.moveImages);
   const removeImages = useStore((s) => s.removeImages);
@@ -40,7 +41,6 @@ export function LabelView() {
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [draft, setDraft] = useState("");
-  const fileInput = useRef<HTMLInputElement>(null);
 
   const labels = manifest?.labels ?? [];
   const images = manifest?.images ?? [];
@@ -80,6 +80,11 @@ export function LabelView() {
       return;
     }
     const added = await addFiles(files, targetLabelId);
+    if (added > 0) toast(`Added ${added} image${added === 1 ? "" : "s"}`, "good");
+  };
+
+  const pickImages = async () => {
+    const added = await importImages(targetLabelId);
     if (added > 0) toast(`Added ${added} image${added === 1 ? "" : "s"}`, "good");
   };
 
@@ -185,12 +190,14 @@ export function LabelView() {
           </div>
 
           <div className="row row--tight">
-            <button className="btn btn--sm" onClick={() => fileInput.current?.click()}>
-              <FilePlus size={16} weight="bold" /> Files
+            <button className="btn btn--sm" onClick={() => void pickImages()}>
+              <FilePlus size={16} weight="bold" /> {storage.mobile ? "Photos" : "Files"}
             </button>
-            <button className="btn btn--sm" onClick={() => void pickFolder()}>
-              <FolderPlus size={16} weight="bold" /> Folder
-            </button>
+            {storage.canPickFolders ? (
+              <button className="btn btn--sm" onClick={() => void pickFolder()}>
+                <FolderPlus size={16} weight="bold" /> Folder
+              </button>
+            ) : null}
             <button
               className="btn btn--sm btn--primary"
               disabled={!activeLabel}
@@ -276,7 +283,9 @@ export function LabelView() {
               text={
                 labels.length === 0
                   ? "Labels are the classes your model learns. Two or more, with about 30 images each, is a good start."
-                  : "Drag in files or whole folders, import from disk, or hold the capture button to grab a burst from your webcam."
+                  : storage.mobile
+                    ? "Choose photos from this device, or hold the capture button to grab a burst from the camera."
+                    : "Drag in files or whole folders, import from disk, or hold the capture button to grab a burst from your webcam."
               }
               action={
                 labels.length === 0 ? (
@@ -284,8 +293,9 @@ export function LabelView() {
                     <Plus size={16} weight="bold" /> Add a label
                   </button>
                 ) : (
-                  <button className="btn" onClick={() => fileInput.current?.click()}>
-                    <UploadSimple size={16} weight="bold" /> Choose files
+                  <button className="btn" onClick={() => void pickImages()}>
+                    <UploadSimple size={16} weight="bold" />
+                    {storage.mobile ? "Choose photos" : "Choose files"}
                   </button>
                 )
               }
@@ -322,19 +332,6 @@ export function LabelView() {
           {dropping ? <div className="drop__veil">Release to import</div> : null}
         </div>
       </section>
-
-      <input
-        ref={fileInput}
-        className="sr-only"
-        type="file"
-        accept="image/*"
-        multiple
-        onChange={(event) => {
-          const files = Array.from(event.target.files ?? []);
-          event.target.value = "";
-          if (files.length > 0) void addFiles(files, targetLabelId);
-        }}
-      />
 
       {capturing && activeLabel ? (
         <CaptureModal label={activeLabel} onClose={() => setCapturing(false)} />

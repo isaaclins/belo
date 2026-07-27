@@ -12,6 +12,7 @@ import { useStore, type Prediction } from "../lib/store";
 import { useWebcam } from "../lib/useWebcam";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { isImageFile, loadImageElement, toSquareCanvas } from "../lib/images";
+import { storage } from "../lib/storage";
 
 const TICK_MS = 220;
 
@@ -149,6 +150,20 @@ export function UseView() {
     [predict, toast],
   );
 
+  const pickStill = async () => {
+    try {
+      const refs = await storage.pickImportImages(false);
+      const ref = refs?.[0];
+      if (!ref) return;
+      const payload = await storage.readImport(ref);
+      const binary = atob(payload.base64);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      await runStill(new File([bytes], ref.name, { type: payload.mime }));
+    } catch {
+      toast("Could not read that image", "bad");
+    }
+  };
+
   const teachFromVideo = (labelId: string) => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return;
@@ -282,7 +297,12 @@ export function UseView() {
           ) : (
             <div className="use__hint">
               <ImageIcon size={26} weight="bold" />
-              <p>Drop one image here to classify it</p>
+              <p>{storage.mobile ? "Choose an image to classify it" : "Drop one image here to classify it"}</p>
+              {storage.mobile ? (
+                <button className="btn btn--sm" onClick={() => void pickStill()}>
+                  Choose image
+                </button>
+              ) : null}
             </div>
           )}
           {thinking ? <div className="use__veil">Thinking</div> : null}

@@ -99,14 +99,25 @@ fn is_image_file(path: &Path) -> bool {
     )
 }
 
-#[tauri::command]
-fn default_projects_dir(app: tauri::AppHandle) -> Res<String> {
-    let base = app
-        .path()
+fn projects_base(app: &tauri::AppHandle) -> Res<PathBuf> {
+    #[cfg(mobile)]
+    {
+        return app
+            .path()
+            .document_dir()
+            .map_err(|e| fail("no sandbox documents directory", e));
+    }
+
+    #[cfg(not(mobile))]
+    app.path()
         .document_dir()
         .or_else(|_| app.path().home_dir())
-        .map_err(|e| fail("no documents directory", e))?;
-    let dir = base.join("Belo");
+        .map_err(|e| fail("no documents directory", e))
+}
+
+#[tauri::command]
+fn default_projects_dir(app: tauri::AppHandle) -> Res<String> {
+    let dir = projects_base(&app)?.join("Belo");
     fs::create_dir_all(&dir).map_err(|e| fail("could not create the Belo folder", e))?;
     Ok(dir.to_string_lossy().to_string())
 }
@@ -125,9 +136,11 @@ fn create_project(dir: String, name: String, manifest: String) -> Res<String> {
         n += 1;
     }
 
-    fs::create_dir_all(root.join(IMAGES_DIR)).map_err(|e| fail("could not create the bundle", e))?;
+    fs::create_dir_all(root.join(IMAGES_DIR))
+        .map_err(|e| fail("could not create the bundle", e))?;
     fs::create_dir_all(root.join(MODEL_DIR)).map_err(|e| fail("could not create the bundle", e))?;
-    fs::write(root.join(MANIFEST), manifest).map_err(|e| fail("could not write project.json", e))?;
+    fs::write(root.join(MANIFEST), manifest)
+        .map_err(|e| fail("could not write project.json", e))?;
     Ok(root.to_string_lossy().to_string())
 }
 
@@ -323,7 +336,12 @@ fn recent_projects(app: tauri::AppHandle) -> Res<Vec<ProjectSummary>> {
 }
 
 #[tauri::command]
-fn remember_project(app: tauri::AppHandle, path: String, name: String, opened_at: String) -> Res<()> {
+fn remember_project(
+    app: tauri::AppHandle,
+    path: String,
+    name: String,
+    opened_at: String,
+) -> Res<()> {
     let mut recents = load_recents(&app);
     recents.retain(|r| r.path != path);
     recents.insert(
@@ -352,6 +370,7 @@ fn forget_project(app: tauri::AppHandle, path: String) -> Res<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             default_projects_dir,

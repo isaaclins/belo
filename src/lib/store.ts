@@ -118,7 +118,9 @@ interface State {
 
   addFiles: (files: File[], labelId: string | null) => Promise<number>;
   addFromImports: (refs: ImportRef[], labelId: string | null) => Promise<number>;
-  /** Opens the platform folder picker and imports everything it returns. */
+  /** Opens the platform image or photo picker and imports its selection. */
+  importImages: (labelId: string | null) => Promise<number>;
+  /** Opens the desktop folder picker and imports everything it returns. */
   importFolder: (labelId: string | null) => Promise<number>;
   addFromDrawable: (source: Drawable, labelId: string | null, origin: ImageSource) => Promise<void>;
   moveImages: (imageIds: string[], labelId: string | null) => void;
@@ -484,6 +486,17 @@ export const useStore = create<State>((set, get) => {
         markStale();
       }
       return added.length;
+    },
+
+    async importImages(labelId) {
+      try {
+        const refs = await storage.pickImportImages(true);
+        if (refs === null) return 0;
+        return await get().addFromImports(refs, labelId);
+      } catch (err) {
+        get().toast(errorText(err), "bad");
+        return 0;
+      }
     },
 
     async importFolder(labelId) {

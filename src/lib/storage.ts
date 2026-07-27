@@ -23,6 +23,11 @@ export interface ImportPayload {
 }
 
 export interface ProjectStorage {
+  /** Platform capabilities used to avoid offering unsupported folder workflows. */
+  readonly mobile: boolean;
+  readonly canPickProjects: boolean;
+  readonly canPickFolders: boolean;
+
   /** Where new projects are created when the user does not choose a location. */
   defaultProjectsDir(): Promise<string>;
   createProject(dir: string, name: string, manifest: string): Promise<string>;
@@ -44,6 +49,8 @@ export interface ProjectStorage {
 
   /** Native picker for an existing project. Resolves to null when cancelled. */
   pickProject(startIn?: string | null): Promise<string | null>;
+  /** Native picker for image files or photos. Resolves to null when cancelled. */
+  pickImportImages(multiple?: boolean): Promise<ImportRef[] | null>;
   /** Native picker for a folder of images. Resolves to null when cancelled. */
   pickImportFolder(): Promise<ImportRef[] | null>;
   /** Loads one picked image so the app can normalize it. */
@@ -71,8 +78,70 @@ function mimeFor(path: string): string {
   return "image/jpeg";
 }
 
+function mimeForBytes(bytes: Uint8Array, name: string): string {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "image/png";
+  }
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return "image/bmp";
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return mimeFor(name);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function pickedName(path: string, index: number): string {
+  try {
+    return decodeURIComponent(baseName(path)) || `Image ${index + 1}`;
+  } catch {
+    return baseName(path) || `Image ${index + 1}`;
+  }
+}
+
+async function pickImages(mobile: boolean, multiple = true): Promise<ImportRef[] | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    multiple,
+    directory: false,
+    title: "Import images",
+    pickerMode: mobile ? "image" : undefined,
+    fileAccessMode: mobile ? "copy" : undefined,
+    filters: [
+      {
+        name: "Images",
+        extensions: mobile ? ["image/*"] : ["jpg", "jpeg", "png", "webp", "gif", "bmp"],
+      },
+    ],
+  });
+  if (!picked) return null;
+  const paths = Array.isArray(picked) ? picked : [picked];
+  return paths.map((path, index) => ({ id: path, name: pickedName(path, index) }));
+}
+
 /** Desktop backend: .belo directory bundles reached through the Rust commands. */
 const desktopStorage: ProjectStorage = {
+  mobile: false,
+  canPickProjects: true,
+  canPickFolders: true,
+
   defaultProjectsDir: () => invoke("default_projects_dir"),
 
   createProject: (dir, name, manifest) => invoke("create_project", { dir, name, manifest }),
@@ -113,6 +182,8 @@ const desktopStorage: ProjectStorage = {
     return typeof picked === "string" ? picked : null;
   },
 
+  pickImportImages: (multiple) => pickImages(false, multiple),
+
   async pickImportFolder() {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const dir = await open({ directory: true, multiple: false, title: "Import a folder" });
@@ -127,4 +198,34 @@ const desktopStorage: ProjectStorage = {
   },
 };
 
-export const storage: ProjectStorage = desktopStorage;
+/** Mobile backend: projects stay in the sandbox and media comes from the native picker. */
+const mobileStorage: ProjectStorage = {
+  ...desktopStorage,
+  mobile: true,
+  canPickProjects: false,
+  canPickFolders: false,
+
+  async pickProject() {
+    throw new Error("Opening external .belo folders is not available on mobile yet");
+  },
+
+  pickImportImages: (multiple) => pickImages(true, multiple),
+
+  async pickImportFolder() {
+    throw new Error("Folder import is not available on mobile. Choose photos instead.");
+  },
+
+  async readImport(ref) {
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const bytes = await readFile(ref.id);
+    return {
+      base64: bytesToBase64(bytes),
+      mime: mimeForBytes(bytes, ref.name),
+    };
+  },
+};
+
+const IS_MOBILE =
+  typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+export const storage: ProjectStorage = IS_MOBILE ? mobileStorage : desktopStorage;

@@ -1,0 +1,341 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		3FCE1EADA6124072AE27B3D4 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 61F03DDF0AA22B6CF873F030 /* WebKit.framework */; };
+		42131677899456902250989A /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 67ECEB8292165D47EBA465F9 /* main.mm */; };
+		583B2D714BA52244CB9D0DDB /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 82FF48435943E621789981DC /* LaunchScreen.storyboard */; };
+		638F2A7EF16573F7C2D21DF8 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A0CB0FE4F7C68FA3D77C718 /* CoreGraphics.framework */; };
+		69D9292D1D1FB3859C11A773 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7B9834B0CCDA6E240F6F0869 /* MetalKit.framework */; };
+		8D87D7892821CBD1C9B3F97E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DCB6C8F620445C85DD6C4C2 /* Assets.xcassets */; };
+		B77E46FD4209CACDF7DCBCA8 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1057C937012C120E5829461C /* Metal.framework */; };
+		BAED7E0EEB9CAB680C3BE8B5 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 69376A33307FCAA3490A68F8 /* Security.framework */; };
+		CB59102FBD7B6EA08CA7B6E5 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A7E373EFD28E0CBF9288D8E /* QuartzCore.framework */; };
+		DB3B04B73E12F80559D3D6CA /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55AA4D9802766B5E84ADD8BB /* UIKit.framework */; };
+		E1A6EB56F62756782785D4DF /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = CC012DD3C022C1C9FAB94846 /* libapp.a */; };
+		F29D0D28BCA91E11EEE8CD6B /* assets in Resources */ = {isa = PBXBuildFile; fileRef = EDCDE005B5CF009194B73FD8 /* assets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		1057C937012C120E5829461C /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		172AAA9B4ED8B4D24A4D1EB0 /* belo_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = belo_iOS.entitlements; sourceTree = "<group>"; };
+		1F251D9744625BE350F667AC /* belo_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = belo_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3A0CB0FE4F7C68FA3D77C718 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		3A7E373EFD28E0CBF9288D8E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		55AA4D9802766B5E84ADD8BB /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		6143A22F6D84DC1EFCFE4CA4 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		61F03DDF0AA22B6CF873F030 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		64766E8A42A2F26D02898109 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		67ECEB8292165D47EBA465F9 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		69376A33307FCAA3490A68F8 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		6DCB6C8F620445C85DD6C4C2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7B9834B0CCDA6E240F6F0869 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		82FF48435943E621789981DC /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		B57BE69BC356104F2A6EEF0D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		CC012DD3C022C1C9FAB94846 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		EDCDE005B5CF009194B73FD8 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		F848DBDD560778525BCD3F8D /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		37BCA8852A8955C53AC4BD3E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E1A6EB56F62756782785D4DF /* libapp.a in Frameworks */,
+				638F2A7EF16573F7C2D21DF8 /* CoreGraphics.framework in Frameworks */,
+				B77E46FD4209CACDF7DCBCA8 /* Metal.framework in Frameworks */,
+				69D9292D1D1FB3859C11A773 /* MetalKit.framework in Frameworks */,
+				CB59102FBD7B6EA08CA7B6E5 /* QuartzCore.framework in Frameworks */,
+				BAED7E0EEB9CAB680C3BE8B5 /* Security.framework in Frameworks */,
+				DB3B04B73E12F80559D3D6CA /* UIKit.framework in Frameworks */,
+				3FCE1EADA6124072AE27B3D4 /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		167195BC204EE7C7807CFE78 /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		225101EB542F065A4C67E04E = {
+			isa = PBXGroup;
+			children = (
+				EDCDE005B5CF009194B73FD8 /* assets */,
+				6DCB6C8F620445C85DD6C4C2 /* Assets.xcassets */,
+				82FF48435943E621789981DC /* LaunchScreen.storyboard */,
+				267FAEB72F68CB8E399BE7E0 /* belo_iOS */,
+				167195BC204EE7C7807CFE78 /* Externals */,
+				A6BF9B1464BBEF2E25E5FC7F /* Sources */,
+				E56303D8A85D6D988E0013AA /* src */,
+				8171ED6D737ED561B35034CA /* Frameworks */,
+				55B77477003270E748151BE0 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		267FAEB72F68CB8E399BE7E0 /* belo_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				172AAA9B4ED8B4D24A4D1EB0 /* belo_iOS.entitlements */,
+				B57BE69BC356104F2A6EEF0D /* Info.plist */,
+			);
+			path = belo_iOS;
+			sourceTree = "<group>";
+		};
+		55B77477003270E748151BE0 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1F251D9744625BE350F667AC /* belo_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		69ECC70749AB1E4841DE4C86 /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				6143A22F6D84DC1EFCFE4CA4 /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		8171ED6D737ED561B35034CA /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				3A0CB0FE4F7C68FA3D77C718 /* CoreGraphics.framework */,
+				CC012DD3C022C1C9FAB94846 /* libapp.a */,
+				1057C937012C120E5829461C /* Metal.framework */,
+				7B9834B0CCDA6E240F6F0869 /* MetalKit.framework */,
+				3A7E373EFD28E0CBF9288D8E /* QuartzCore.framework */,
+				69376A33307FCAA3490A68F8 /* Security.framework */,
+				55AA4D9802766B5E84ADD8BB /* UIKit.framework */,
+				61F03DDF0AA22B6CF873F030 /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A6BF9B1464BBEF2E25E5FC7F /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				E5115E472C970F623D0A4A84 /* belo */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		E5115E472C970F623D0A4A84 /* belo */ = {
+			isa = PBXGroup;
+			children = (
+				67ECEB8292165D47EBA465F9 /* main.mm */,
+				69ECC70749AB1E4841DE4C86 /* bindings */,
+			);
+			path = belo;
+			sourceTree = "<group>";
+		};
+		E56303D8A85D6D988E0013AA /* src */ = {
+			isa = PBXGroup;
+			children = (
+				F848DBDD560778525BCD3F8D /* lib.rs */,
+				64766E8A42A2F26D02898109 /* main.rs */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		882501C8506505F2D403A150 /* belo_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CF274CF283D616A5EA4CE841 /* Build configuration list for PBXNativeTarget "belo_iOS" */;
+			buildPhases = (
+				547EE5F96981649E2D6337CB /* Build Rust Code */,
+				B0CB5CE1261D458A088F7124 /* Sources */,
+				1F4363096C10E2082E9F577C /* Resources */,
+				37BCA8852A8955C53AC4BD3E /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = belo_iOS;
+			packageProductDependencies = (
+			);
+			productName = belo_iOS;
+			productReference = 1F251D9744625BE350F667AC /* belo_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BAFC72DFF587F6B702697E78 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = ED172FDC541210F96A463E99 /* Build configuration list for PBXProject "belo" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 225101EB542F065A4C67E04E;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 55B77477003270E748151BE0 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				882501C8506505F2D403A150 /* belo_iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1F4363096C10E2082E9F577C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8D87D7892821CBD1C9B3F97E /* Assets.xcassets in Resources */,
+				583B2D714BA52244CB9D0DDB /* LaunchScreen.storyboard in Resources */,
+				F29D0D28BCA91E11EEE8CD6B /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		547EE5F96981649E2D6337CB /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B0CB5CE1261D458A088F7124 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				42131677899456902250989A /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1155A1553ECAD11E97868321 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				CODE_SIGN_ENTITLEMENTS = belo_iOS/belo_iOS.entitlements;
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = belo_iOS/Info.plist;
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = app.belo;
+				PRODUCT_NAME = "Belo";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		29F6BCA187385A416DB9DD8F /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				SDKROOT = iphoneos;
+			};
+			name = release;
+		};
+		4EAC479FAA173B264646FCE5 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				CODE_SIGN_ENTITLEMENTS = belo_iOS/belo_iOS.entitlements;
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = belo_iOS/Info.plist;
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = app.belo;
+				PRODUCT_NAME = "Belo";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+		9DB5AE024BBA8903CC1734FD /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				SDKROOT = iphoneos;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CF274CF283D616A5EA4CE841 /* Build configuration list for PBXNativeTarget "belo_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4EAC479FAA173B264646FCE5 /* debug */,
+				1155A1553ECAD11E97868321 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		ED172FDC541210F96A463E99 /* Build configuration list for PBXProject "belo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9DB5AE024BBA8903CC1734FD /* debug */,
+				29F6BCA187385A416DB9DD8F /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = BAFC72DFF587F6B702697E78 /* Project object */;
+}

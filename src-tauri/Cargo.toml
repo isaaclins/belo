@@ -19,6 +19,15 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+tauri-plugin-fs = "2"
+
+[package.metadata.android]
+app-permissions = ["android.permission.CAMERA"]
+
+# swift-rs 1.0.7 lets SwiftPM select macOS after the iOS SDK on Xcode 27.
+# This local patch selects the iOS triple explicitly until the upstream crate does.
+[patch.crates-io]
+swift-rs = { path = "vendor/swift-rs" }
 
 [profile.release]
 codegen-units = 1

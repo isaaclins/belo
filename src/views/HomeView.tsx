@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, FolderOpen, Plus, Stack, Trash, Circuitry } from "@phosphor-icons/react";
 import { useStore } from "../lib/store";
 import { Modal } from "../components/ui";
+import { storage } from "../lib/storage";
 import type { ProjectSummary } from "../lib/types";
 
 function relativeTime(iso: string): string {
@@ -81,9 +82,11 @@ export function HomeView() {
           <button className="btn btn--lg btn--primary" onClick={() => setNaming(true)}>
             <Plus size={18} weight="bold" /> New project
           </button>
-          <button className="btn btn--lg" onClick={() => void openProjectDialog()}>
-            <FolderOpen size={18} weight="bold" /> Open .belo
-          </button>
+          {storage.canPickProjects ? (
+            <button className="btn btn--lg" onClick={() => void openProjectDialog()}>
+              <FolderOpen size={18} weight="bold" /> Open .belo
+            </button>
+          ) : null}
         </div>
         <p className="home__dir mono">
           Projects live in {projectsDir ?? "your documents folder"}
