@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Belo",
+  "version": "0.1.0",
+  "identifier": "com.belo.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Belo",
+        "width": 1320,
+        "height": 880,
+        "minWidth": 1000,
+        "minHeight": 660,
+        "resizable": true,
+        "center": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob: mediastream:; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost blob: data:; worker-src 'self' blob:",
+      "devCsp": "default-src 'self' http://localhost:1420; script-src 'self' 'wasm-unsafe-eval' http://localhost:1420; style-src 'self' 'unsafe-inline' http://localhost:1420; font-src 'self' data: http://localhost:1420; img-src 'self' asset: http://asset.localhost blob: data: http://localhost:1420; media-src 'self' asset: http://asset.localhost blob: mediastream: http://localhost:1420; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost blob: data: http://localhost:1420 ws://localhost:1421; worker-src 'self' blob:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": ["$HOME/**"],
+          "requireLiteralLeadingDot": false
+        }
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Train image classifiers locally",
+    "longDescription": "Belo collects and labels images, trains an image classifier on your machine, and lets you use it live from your webcam. Nothing leaves the device.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}
