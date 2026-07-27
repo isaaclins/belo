@@ -1,0 +1,361 @@
+/* Shared primitives: button, card, field, badge, meter, modal, empty state. */
+
+/* ---------- Button ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  white-space: nowrap;
+  padding: 10px 16px;
+  background: var(--panel);
+  color: var(--ink);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  box-shadow: var(--shadow);
+  transform: translate(-2px, -2px);
+}
+
+.btn:active:not(:disabled) {
+  box-shadow: 0 0 0 var(--ink);
+  transform: translate(3px, 3px);
+}
+
+.btn:disabled {
+  opacity: 1;
+  background: var(--paper-deep);
+  color: var(--ink-soft);
+  box-shadow: none;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.btn--primary {
+  background: var(--accent);
+}
+.btn--go {
+  background: var(--accent-2);
+  color: #fff;
+}
+.btn--danger {
+  background: var(--danger);
+  color: #fff;
+}
+.btn--ink {
+  background: var(--ink);
+  color: var(--paper);
+}
+.btn--lg {
+  padding: 14px 22px;
+  font-size: 16px;
+  box-shadow: var(--shadow);
+}
+.btn--lg:hover:not(:disabled) {
+  box-shadow: var(--shadow-lg);
+}
+.btn--sm {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.btn--block {
+  width: 100%;
+}
+
+/* Icon-only square button. */
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  background: var(--panel);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.08s ease;
+}
+.iconbtn:hover {
+  background: var(--accent);
+  transform: translate(-1px, -1px);
+}
+.iconbtn:active {
+  transform: translate(1px, 1px);
+}
+.iconbtn--danger:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---------- Card ---------- */
+.card {
+  background: var(--panel);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: var(--border-w) solid var(--ink);
+}
+
+.card__body {
+  padding: var(--s4);
+}
+
+/* ---------- Field ---------- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.field__label {
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.field__hint {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.field__error {
+  font-size: 12px;
+  font-weight: 700;
+  color: #b3170d;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--panel);
+  color: var(--ink);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  font: inherit;
+}
+
+.input::placeholder {
+  color: #6b6672;
+}
+
+.input:focus {
+  outline: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.input:focus-visible {
+  outline: 3px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+/* ---------- Badge / chip ---------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.badge--ok {
+  background: var(--success);
+}
+.badge--bad {
+  background: var(--danger);
+  color: #fff;
+}
+.badge--idle {
+  background: var(--paper-deep);
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border: 2px solid var(--ink);
+  border-radius: 2px;
+}
+
+/* ---------- Meter ---------- */
+.meter {
+  height: 14px;
+  background: var(--paper-deep);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.meter__fill {
+  height: 100%;
+  background: var(--accent-2);
+  transition: width 0.15s linear;
+}
+
+.meter--lg {
+  height: 22px;
+}
+
+/* ---------- Modal ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: var(--s5);
+  background: repeating-linear-gradient(
+    45deg,
+    var(--ink) 0 2px,
+    var(--paper-deep) 2px 7px
+  );
+}
+
+.modal {
+  width: min(520px, 100%);
+  background: var(--panel);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s3) var(--s4);
+  background: var(--accent);
+  border-bottom: var(--border-w) solid var(--ink);
+}
+
+.modal__body {
+  padding: var(--s5) var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-top: var(--border-w) solid var(--ink);
+}
+
+/* ---------- Empty state ---------- */
+.empty {
+  display: grid;
+  place-items: center;
+  gap: var(--s4);
+  padding: var(--s7) var(--s5);
+  text-align: center;
+}
+
+.empty__mark {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  background: var(--accent);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.empty__text {
+  max-width: 46ch;
+  color: var(--ink-soft);
+}
+
+/* ---------- Toast ---------- */
+.toasts {
+  position: fixed;
+  right: var(--s5);
+  bottom: var(--s5);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  pointer-events: none;
+}
+
+.toast {
+  min-width: 240px;
+  max-width: 380px;
+  padding: 10px var(--s3);
+  background: var(--ink);
+  color: var(--paper);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  font-size: 13px;
+  animation: toast-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toast--bad {
+  background: var(--danger);
+  color: #fff;
+}
+
+.toast--good {
+  background: var(--success);
+  color: var(--ink);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- Misc layout helpers ---------- */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.row--tight {
+  gap: var(--s2);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}

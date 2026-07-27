@@ -1,0 +1,88 @@
+/*
+  Belo design tokens.
+  Neobrutalist system: flat opaque color, thick ink borders, hard offset shadows,
+  zero blur, zero gradients. One radius scale (4px), one shadow scale.
+*/
+
+@font-face {
+  font-family: "Archivo Black";
+  src: url("../assets/fonts/archivo-black-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("../assets/fonts/space-grotesk-var.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../assets/fonts/jetbrains-mono-var.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* Ink and surfaces. Warm paper, never pure white. */
+  --ink: #111014;
+  --ink-soft: #4a4650;
+  --paper: #f4efe4;
+  --paper-deep: #e7dfcd;
+  --panel: #fffdf8;
+
+  /* Accents. Vivid, flat, high contrast against paper and ink. */
+  --accent: #ffd83d;
+  --accent-2: #2f6bff;
+  --accent-3: #ff5c8a;
+  --danger: #ff4a3d;
+  --success: #17c26a;
+  --violet: #8b5cf6;
+
+  /* Label swatch ramp, index 0 through 7. */
+  --swatch-0: #ffd83d;
+  --swatch-1: #2f6bff;
+  --swatch-2: #ff5c8a;
+  --swatch-3: #17c26a;
+  --swatch-4: #ff8a1f;
+  --swatch-5: #8b5cf6;
+  --swatch-6: #00c2c7;
+  --swatch-7: #ff4a3d;
+
+  /* Structure */
+  --border-w: 3px;
+  --border-w-thin: 2px;
+  --radius: 4px;
+  --shadow: 5px 5px 0 var(--ink);
+  --shadow-sm: 3px 3px 0 var(--ink);
+  --shadow-lg: 9px 9px 0 var(--ink);
+
+  /* Type */
+  --font-display: "Archivo Black", "Helvetica Neue", Impact, sans-serif;
+  --font-body: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+
+  /* Spacing rhythm 4 / 8 / 12 / 16 / 24 / 32 / 48 */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  --header-h: 68px;
+}
+
+@media (max-width: 900px) {
+  :root {
+    --border-w: 2px;
+    --shadow: 4px 4px 0 var(--ink);
+    --shadow-lg: 6px 6px 0 var(--ink);
+  }
+}
