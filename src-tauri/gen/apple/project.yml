@@ -12,6 +12,9 @@ settingGroups:
     base:
       PRODUCT_NAME: Belo
       PRODUCT_BUNDLE_IDENTIFIER: app.belo
+      # Without this the asset catalog is compiled but no icon is assigned, so
+      # the installed app shows a blank tile on the home screen.
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 targetTemplates:
   app:
     type: application

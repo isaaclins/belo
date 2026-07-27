@@ -169,7 +169,7 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_8A1AE1BF-63A5-4750-8531-08B32B1F1D44" /* x86_64 */ = {
+		"TEMP_4859D0BE-34CE-4EE6-B75D-B3C6475382AD" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -286,6 +286,7 @@
 				ARCHS = (
 					arm64,
 				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = belo_iOS/belo_iOS.entitlements;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
@@ -317,6 +318,7 @@
 				ARCHS = (
 					arm64,
 				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = belo_iOS/belo_iOS.entitlements;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
