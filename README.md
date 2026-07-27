@@ -4,7 +4,7 @@ An app for training image classifiers on your own pictures. Collect images, labe
 them, train, and use the result live from your camera. Everything runs on the device:
 no account, no upload, no network calls at runtime.
 
-Version 0.3.0. Desktop and iOS are supported. Android is code-complete but has not yet
+Version 0.3.1. Desktop and iOS are supported. Android is code-complete but has not yet
 been built on an Android toolchain.
 
 ## What it does
@@ -96,7 +96,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 2,
-  "appVersion": "0.3.0",
+  "appVersion": "0.3.1",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
