@@ -73,15 +73,6 @@ export async function base64ToJpegBase64(data: string, mime = "image/jpeg"): Pro
   return normalizeToJpegBase64(img);
 }
 
-export function mimeForPath(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase();
-  if (ext === "png") return "image/png";
-  if (ext === "webp") return "image/webp";
-  if (ext === "gif") return "image/gif";
-  if (ext === "bmp") return "image/bmp";
-  return "image/jpeg";
-}
-
 const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "bmp", "gif"];
 
 export function isImageFile(file: File): boolean {
@@ -92,7 +83,9 @@ export function isImageFile(file: File): boolean {
 
 /**
  * Pulls every image file out of a drop, walking directories when the webview
- * exposes the entry API. Falls back to the flat file list otherwise.
+ * exposes the entry API. Falls back to the flat file list otherwise, which is
+ * what platforms without folder drag and drop will hit. Drag and drop intake is
+ * contained here so views never branch on platform behavior themselves.
  */
 export async function filesFromDataTransfer(dt: DataTransfer): Promise<File[]> {
   const entries: FileSystemEntry[] = [];

@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import type * as tfTypes from "@tensorflow/tfjs";
-import * as api from "./api";
+import { storage, type ImportRef } from "./storage";
 import {
   DEFAULT_SETTINGS,
   makeId,
@@ -21,7 +21,6 @@ import {
   base64ToJpegBase64,
   fileToJpegBase64,
   loadImageElement,
-  mimeForPath,
   normalizeToJpegBase64,
   type Drawable,
 } from "./images";
@@ -118,7 +117,9 @@ interface State {
   setActiveLabel: (id: string | null) => void;
 
   addFiles: (files: File[], labelId: string | null) => Promise<number>;
-  addFromPaths: (paths: string[], labelId: string | null) => Promise<number>;
+  addFromImports: (refs: ImportRef[], labelId: string | null) => Promise<number>;
+  /** Opens the platform folder picker and imports everything it returns. */
+  importFolder: (labelId: string | null) => Promise<number>;
   addFromDrawable: (source: Drawable, labelId: string | null, origin: ImageSource) => Promise<void>;
   moveImages: (imageIds: string[], labelId: string | null) => void;
   removeImages: (imageIds: string[]) => Promise<void>;
@@ -194,7 +195,7 @@ export const useStore = create<State>((set, get) => {
     if (cached) return cached;
     const path = get().path;
     if (!path) throw new Error("No project is open");
-    const img = await loadImageElement(api.imageUrl(path, record.file));
+    const img = await loadImageElement(storage.imageUrl(path, record.file));
     const feature = await embedToArray(img);
     featureCache.set(record.id, feature);
     return feature;
@@ -209,7 +210,7 @@ export const useStore = create<State>((set, get) => {
     if (!path) throw new Error("No project is open");
     const id = makeId("img");
     const file = `${id}.jpg`;
-    await api.writeImage(path, file, jpegBase64);
+    await storage.writeImage(path, file, jpegBase64);
     return { id, file, labelId, source: origin, addedAt: new Date().toISOString() };
   };
 
@@ -233,7 +234,7 @@ export const useStore = create<State>((set, get) => {
 
     async boot() {
       try {
-        const dir = await api.defaultProjectsDir();
+        const dir = await storage.defaultProjectsDir();
         set({ projectsDir: dir });
       } catch (err) {
         get().toast(errorText(err), "bad");
@@ -248,10 +249,10 @@ export const useStore = create<State>((set, get) => {
 
     async refreshRecents() {
       try {
-        const recents = await api.recentProjects();
+        const recents = await storage.recentProjects();
         const dir = get().projectsDir;
         const known = new Set(recents.map((r) => r.path));
-        const scanned = dir ? await api.scanProjects(dir) : [];
+        const scanned = dir ? await storage.scanProjects(dir) : [];
         const merged = [...recents.filter((r) => !r.missing)];
         for (const project of scanned) {
           if (!known.has(project.path)) merged.push(project);
@@ -278,9 +279,9 @@ export const useStore = create<State>((set, get) => {
 
     async createProject(name) {
       try {
-        const dir = get().projectsDir ?? (await api.defaultProjectsDir());
+        const dir = get().projectsDir ?? (await storage.defaultProjectsDir());
         const manifest = newManifest(name.trim() || "Untitled", APP_VERSION);
-        const path = await api.createProject(dir, manifest.name, JSON.stringify(manifest, null, 2));
+        const path = await storage.createProject(dir, manifest.name, JSON.stringify(manifest, null, 2));
         featureCache.clear();
         dropModel();
         set({
@@ -291,7 +292,7 @@ export const useStore = create<State>((set, get) => {
           activeLabelId: null,
           train: idleTrainState,
         });
-        await api.rememberProject(path, manifest.name);
+        await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
       } catch (err) {
         get().toast(errorText(err), "bad");
@@ -300,7 +301,7 @@ export const useStore = create<State>((set, get) => {
 
     async openProject(path) {
       try {
-        const text = await api.readManifest(path);
+        const text = await storage.readManifest(path);
         const manifest = JSON.parse(text) as ProjectManifest;
         manifest.settings = { ...DEFAULT_SETTINGS, ...manifest.settings };
         featureCache.clear();
@@ -313,11 +314,11 @@ export const useStore = create<State>((set, get) => {
           activeLabelId: manifest.labels[0]?.id ?? null,
           train: idleTrainState,
         });
-        await api.rememberProject(path, manifest.name);
+        await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
 
         // Restore a previously trained head so the Use view works immediately.
-        const stored = await api.readModel(path);
+        const stored = await storage.readModel(path);
         if (stored) {
           await loadFeatureModel();
           const parsed = JSON.parse(stored) as StoredHead;
@@ -334,14 +335,8 @@ export const useStore = create<State>((set, get) => {
 
     async openProjectDialog() {
       try {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const picked = await open({
-          directory: true,
-          multiple: false,
-          title: "Open a .belo project",
-          defaultPath: get().projectsDir ?? undefined,
-        });
-        if (typeof picked === "string") await get().openProject(picked);
+        const picked = await storage.pickProject(get().projectsDir);
+        if (picked) await get().openProject(picked);
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
@@ -363,7 +358,7 @@ export const useStore = create<State>((set, get) => {
     },
 
     async forgetProject(path) {
-      await api.forgetProject(path);
+      await storage.forgetProject(path);
       await get().refreshRecents();
     },
 
@@ -380,7 +375,7 @@ export const useStore = create<State>((set, get) => {
       }
       set({ saving: true });
       try {
-        await api.writeManifest(path, JSON.stringify(manifest, null, 2));
+        await storage.writeManifest(path, JSON.stringify(manifest, null, 2));
         set({ dirty: false });
       } catch (err) {
         get().toast(errorText(err), "bad");
@@ -425,7 +420,7 @@ export const useStore = create<State>((set, get) => {
       if (!manifest || !path) return;
       const doomed = manifest.images.filter((img) => img.labelId === id);
       try {
-        if (doomed.length > 0) await api.deleteImages(path, doomed.map((img) => img.file));
+        if (doomed.length > 0) await storage.deleteImages(path, doomed.map((img) => img.file));
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
@@ -468,20 +463,20 @@ export const useStore = create<State>((set, get) => {
       return added.length;
     },
 
-    async addFromPaths(paths, labelId) {
+    async addFromImports(refs, labelId) {
       const manifest = get().manifest;
-      if (!manifest || paths.length === 0) return 0;
+      if (!manifest || refs.length === 0) return 0;
       const added: ImageRecord[] = [];
-      set({ busy: { title: "Importing images", done: 0, total: paths.length } });
-      for (let i = 0; i < paths.length; i += 1) {
+      set({ busy: { title: "Importing images", done: 0, total: refs.length } });
+      for (let i = 0; i < refs.length; i += 1) {
         try {
-          const raw = await api.readFileBase64(paths[i]);
-          const jpeg = await base64ToJpegBase64(raw, mimeForPath(paths[i]));
+          const payload = await storage.readImport(refs[i]);
+          const jpeg = await base64ToJpegBase64(payload.base64, payload.mime);
           added.push(await writeImageRecord(jpeg, labelId, "import"));
         } catch {
           // Same as addFiles: unreadable files are skipped, not fatal.
         }
-        set({ busy: { title: "Importing images", done: i + 1, total: paths.length } });
+        set({ busy: { title: "Importing images", done: i + 1, total: refs.length } });
       }
       set({ busy: null });
       if (added.length > 0) {
@@ -489,6 +484,21 @@ export const useStore = create<State>((set, get) => {
         markStale();
       }
       return added.length;
+    },
+
+    async importFolder(labelId) {
+      try {
+        const refs = await storage.pickImportFolder();
+        if (refs === null) return 0;
+        if (refs.length === 0) {
+          get().toast("That folder has no images", "bad");
+          return 0;
+        }
+        return await get().addFromImports(refs, labelId);
+      } catch (err) {
+        get().toast(errorText(err), "bad");
+        return 0;
+      }
     },
 
     async addFromDrawable(source, labelId, origin) {
@@ -520,7 +530,7 @@ export const useStore = create<State>((set, get) => {
       const doomed = manifest.images.filter((img) => imageIds.includes(img.id));
       if (doomed.length === 0) return;
       try {
-        await api.deleteImages(path, doomed.map((img) => img.file));
+        await storage.deleteImages(path, doomed.map((img) => img.file));
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
@@ -626,7 +636,7 @@ export const useStore = create<State>((set, get) => {
         });
 
         const stored = serializeHead(result.model, labelIds, manifest.settings.hiddenUnits);
-        await api.writeModel(path, JSON.stringify(stored));
+        await storage.writeModel(path, JSON.stringify(stored));
 
         touch({
           model: {

@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { camera, type CameraInfo } from "./capture";
 
 export type CameraStatus = "off" | "starting" | "live" | "error";
-
-export interface CameraInfo {
-  deviceId: string;
-  label: string;
-}
+export type { CameraInfo };
 
 /**
- * Owns one getUserMedia session. The stream is always torn down when the
- * component unmounts or the caller flips active to false, so the camera
- * indicator never stays lit after leaving a view.
+ * Owns one camera session on behalf of a view. The stream is always torn down
+ * when the component unmounts or the caller flips active to false, so the
+ * camera indicator never stays lit after leaving a view. All platform calls go
+ * through the capture module.
  */
 export function useWebcam(active: boolean) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -22,7 +20,7 @@ export function useWebcam(active: boolean) {
   const [attempt, setAttempt] = useState(0);
 
   const stop = useCallback(() => {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
+    camera.stop(streamRef.current);
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
   }, []);
@@ -42,17 +40,9 @@ export function useWebcam(active: boolean) {
 
     (async () => {
       try {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error("This webview does not expose a camera API");
-        }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: deviceId
-            ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
-            : { width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
-        });
+        const stream = await camera.start(deviceId);
         if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
+          camera.stop(stream);
           return;
         }
         streamRef.current = stream;
@@ -62,14 +52,8 @@ export function useWebcam(active: boolean) {
         }
         setStatus("live");
 
-        // Device labels only become readable once permission is granted.
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        if (cancelled) return;
-        setCameras(
-          devices
-            .filter((d) => d.kind === "videoinput")
-            .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })),
-        );
+        const devices = await camera.list();
+        if (!cancelled) setCameras(devices);
       } catch (err) {
         if (cancelled) return;
         setStatus("error");

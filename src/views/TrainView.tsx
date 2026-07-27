@@ -3,7 +3,7 @@ import { Brain, CheckCircle, Lightning, Sliders, Stop, WarningCircle } from "@ph
 import { useStore, type ImageVerdict } from "../lib/store";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { DEFAULT_SETTINGS, type TrainSettings } from "../lib/types";
-import * as api from "../lib/api";
+import { storage } from "../lib/storage";
 
 type Filter = "all" | "correct" | "wrong";
 
@@ -232,7 +232,7 @@ export function TrainView() {
                       key={verdict.imageId}
                       className={`verdict${verdict.correct ? "" : " verdict--bad"}`}
                     >
-                      <img src={api.imageUrl(path, fileFor(verdict))} alt="" loading="lazy" />
+                      <img src={storage.imageUrl(path, fileFor(verdict))} alt="" loading="lazy" />
                       <div className="verdict__body">
                         <span className="verdict__row">
                           <span className="dot" style={{ background: colorFor(verdict.actualLabelId) }} />

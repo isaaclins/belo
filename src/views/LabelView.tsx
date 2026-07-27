@@ -12,9 +12,9 @@ import {
   UploadSimple,
 } from "@phosphor-icons/react";
 import { useStore } from "../lib/store";
-import { EmptyState, swatch } from "../components/ui";
+import { EmptyState, Modal, swatch } from "../components/ui";
 import { filesFromDataTransfer } from "../lib/images";
-import * as api from "../lib/api";
+import { storage } from "../lib/storage";
 import { CaptureModal } from "./CaptureModal";
 import type { ImageRecord } from "../lib/types";
 
@@ -29,7 +29,7 @@ export function LabelView() {
   const renameLabel = useStore((s) => s.renameLabel);
   const deleteLabel = useStore((s) => s.deleteLabel);
   const addFiles = useStore((s) => s.addFiles);
-  const addFromPaths = useStore((s) => s.addFromPaths);
+  const importFolder = useStore((s) => s.importFolder);
   const moveImages = useStore((s) => s.moveImages);
   const removeImages = useStore((s) => s.removeImages);
   const toast = useStore((s) => s.toast);
@@ -38,6 +38,7 @@ export function LabelView() {
   const [dropping, setDropping] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [draft, setDraft] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -83,20 +84,8 @@ export function LabelView() {
   };
 
   const pickFolder = async () => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const dir = await open({ directory: true, multiple: false, title: "Import a folder" });
-      if (typeof dir !== "string") return;
-      const found = await api.listImagesInDir(dir, true);
-      if (found.length === 0) {
-        toast("That folder has no images", "bad");
-        return;
-      }
-      const added = await addFromPaths(found, targetLabelId);
-      if (added > 0) toast(`Added ${added} image${added === 1 ? "" : "s"}`, "good");
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Import failed", "bad");
-    }
+    const added = await importFolder(targetLabelId);
+    if (added > 0) toast(`Added ${added} image${added === 1 ? "" : "s"}`, "good");
   };
 
   const toggle = (id: string, additive: boolean) => {
@@ -215,7 +204,7 @@ export function LabelView() {
                 className="iconbtn iconbtn--danger"
                 title="Delete this label and its images"
                 aria-label="Delete this label and its images"
-                onClick={() => void deleteLabel(activeLabel.id)}
+                onClick={() => setConfirmDelete(true)}
               >
                 <Trash size={16} weight="bold" />
               </button>
@@ -312,7 +301,12 @@ export function LabelView() {
                     onClick={(event) => toggle(image.id, event.metaKey || event.ctrlKey || event.shiftKey)}
                     aria-pressed={on}
                   >
-                    <img src={api.imageUrl(path, image.file)} alt="" loading="lazy" draggable={false} />
+                    <img
+                      src={storage.imageUrl(path, image.file)}
+                      alt=""
+                      loading="lazy"
+                      draggable={false}
+                    />
                     {on ? (
                       <span className="tile__check">
                         <Check size={14} weight="bold" />
@@ -344,6 +338,36 @@ export function LabelView() {
 
       {capturing && activeLabel ? (
         <CaptureModal label={activeLabel} onClose={() => setCapturing(false)} />
+      ) : null}
+
+      {confirmDelete && activeLabel ? (
+        <Modal
+          title={`Delete ${activeLabel.name}`}
+          onClose={() => setConfirmDelete(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setConfirmDelete(false)}>
+                Keep it
+              </button>
+              <button
+                className="btn btn--danger"
+                onClick={() => {
+                  setConfirmDelete(false);
+                  setSelection([]);
+                  void deleteLabel(activeLabel.id);
+                }}
+              >
+                <Trash size={16} weight="bold" /> Delete label
+              </button>
+            </>
+          }
+        >
+          <p>
+            This removes the label and deletes its {countFor(activeLabel.id)} image
+            {countFor(activeLabel.id) === 1 ? "" : "s"} from the project folder. It cannot be
+            undone.
+          </p>
+        </Modal>
       ) : null}
     </div>
   );

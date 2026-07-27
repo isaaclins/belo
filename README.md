@@ -120,10 +120,11 @@ src/
   App.tsx                 shell, top bar, stage tabs
   components/ui.tsx       modal, meter, toasts, empty state
   lib/
-    api.ts                wrappers for the Rust commands
+    storage.ts            ProjectStorage seam: the only module that talks to Tauri
+    capture.ts            CameraSource seam: the only module that calls getUserMedia
     store.ts              application store: project, disk writes, feature cache, head
     images.ts             normalization, drag and drop extraction
-    useWebcam.ts          getUserMedia session handling
+    useWebcam.ts          camera session lifecycle on top of capture.ts
     types.ts              manifest schema
     ml/backend.ts         WebGL then WASM backend selection
     ml/features.ts        truncated MobileNet feature extractor
@@ -133,6 +134,28 @@ src/
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
 public/models/            bundled MobileNet weights
 ```
+
+## Mobile
+
+This version targets desktop only, but the platform-specific surface is deliberately
+narrow so an iOS and Android port through Tauri 2 mobile stays cheap. Two modules hold
+every platform assumption:
+
+- `src/lib/storage.ts` exposes the `ProjectStorage` interface and one desktop
+  implementation. It is the only place that imports Tauri APIs, builds paths, calls the
+  asset protocol or opens native pickers. A mobile backend writes a second object that
+  satisfies the same interface, backed by sandboxed app storage and a document or photo
+  picker, then changes the final `export const storage` binding.
+- `src/lib/capture.ts` exposes the `CameraSource` interface and one web implementation.
+  It is the only place that calls `getUserMedia` or `enumerateDevices`. A native camera
+  plugin implements the same three methods.
+
+Everything else, including the store, views and the training code, is written against
+those interfaces and against opaque handles rather than filesystem paths. The remaining
+work for a port is therefore: the two implementations above, mobile permission entries,
+and a responsive pass on the views, which are currently laid out for a window at least
+1000px wide. Drag and drop intake lives in `src/lib/images.ts` and already degrades to a
+flat file list where folder drops are unavailable.
 
 ## Camera and permissions
 
