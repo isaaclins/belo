@@ -4,7 +4,8 @@
 //   MyProject.belo/
 //     project.json      manifest: labels, image records, model metadata
 //     images/*.jpg      normalized 224x224 training images
-//     model/head.json   trained classifier head weights
+//     model/head.json       trained classifier head weights
+//     model/head.prev.json  checkpoint of the head before the last auto retrain
 //
 // The manifest schema is owned by the frontend, so this layer moves strings
 // and bytes only. It never parses project.json beyond a couple of display
@@ -22,6 +23,7 @@ const BUNDLE_EXT: &str = "belo";
 const MANIFEST: &str = "project.json";
 const IMAGES_DIR: &str = "images";
 const MODEL_DIR: &str = "model";
+const CHECKPOINT_FILE: &str = "head.prev.json";
 const RECENTS_FILE: &str = "recents.json";
 const MAX_RECENTS: usize = 12;
 
@@ -208,6 +210,45 @@ fn read_model(path: String) -> Res<Option<String>> {
         .map_err(|e| fail("could not read the model", e))
 }
 
+// The checkpoint is a plain copy of a previous head.json, kept so an automatic
+// background retrain can always be undone from the Train view.
+#[tauri::command]
+fn write_checkpoint(path: String, weights: String) -> Res<()> {
+    let root = bundle_root(&path)?;
+    let dir = root.join(MODEL_DIR);
+    fs::create_dir_all(&dir).map_err(|e| fail("could not open the model folder", e))?;
+    fs::write(dir.join(CHECKPOINT_FILE), weights)
+        .map_err(|e| fail("could not write the checkpoint", e))
+}
+
+#[tauri::command]
+fn read_checkpoint(path: String) -> Res<Option<String>> {
+    let root = bundle_root(&path)?;
+    let file = root.join(MODEL_DIR).join(CHECKPOINT_FILE);
+    if !file.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(file)
+        .map(Some)
+        .map_err(|e| fail("could not read the checkpoint", e))
+}
+
+#[tauri::command]
+fn has_checkpoint(path: String) -> Res<bool> {
+    let root = bundle_root(&path)?;
+    Ok(root.join(MODEL_DIR).join(CHECKPOINT_FILE).exists())
+}
+
+#[tauri::command]
+fn clear_checkpoint(path: String) -> Res<()> {
+    let root = bundle_root(&path)?;
+    let file = root.join(MODEL_DIR).join(CHECKPOINT_FILE);
+    if file.exists() {
+        fs::remove_file(&file).map_err(|e| fail("could not clear the checkpoint", e))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn read_file_base64(path: String) -> Res<String> {
     let bytes = fs::read(&path).map_err(|e| fail("could not read the file", e))?;
@@ -381,6 +422,10 @@ pub fn run() {
             delete_images,
             write_model,
             read_model,
+            write_checkpoint,
+            read_checkpoint,
+            has_checkpoint,
+            clear_checkpoint,
             read_file_base64,
             list_images_in_dir,
             project_summary,

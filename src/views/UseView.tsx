@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Brain,
+  CircleNotch,
   Image as ImageIcon,
   Play,
   PlusCircle,
@@ -83,6 +84,7 @@ function FeedbackBar({
 export function UseView() {
   const hasModel = useStore((s) => s.hasModel);
   const stale = useStore((s) => s.stale);
+  const autoRetraining = useStore((s) => s.autoRetraining);
   const manifest = useStore((s) => s.manifest);
   const predict = useStore((s) => s.predict);
   const addFromDrawable = useStore((s) => s.addFromDrawable);
@@ -174,7 +176,7 @@ export function UseView() {
     if (!video || video.videoWidth === 0) return;
     void addFromDrawable(toSquareCanvas(video), labelId, "feedback");
     const name = manifest?.labels.find((l) => l.id === labelId)?.name ?? "the label";
-    toast(`Frame added to ${name}. Train again to fold it in.`, "good");
+    toast(`Frame added to ${name}. It retrains itself in a moment.`, "good");
   };
 
   const teachFromStill = (labelId: string) => {
@@ -182,7 +184,7 @@ export function UseView() {
     if (!img) return;
     void addFromDrawable(toSquareCanvas(img), labelId, "feedback");
     const name = manifest?.labels.find((l) => l.id === labelId)?.name ?? "the label";
-    toast(`Image added to ${name}. Train again to fold it in.`, "good");
+    toast(`Image added to ${name}. It retrains itself in a moment.`, "good");
   };
 
   if (!manifest) return null;
@@ -321,7 +323,12 @@ export function UseView() {
         ) : null}
       </section>
 
-      {stale ? (
+      {autoRetraining ? (
+        <p className="use__flag use__flag--calm">
+          <CircleNotch size={14} weight="bold" className="spin" /> Retraining with your corrections.
+          Keep going, the current model stays live until the new one is ready.
+        </p>
+      ) : stale ? (
         <p className="use__flag">
           New images were added since training. The classifier below still runs the older model.
         </p>

@@ -137,6 +137,23 @@
   color: var(--accent);
 }
 
+.retrainflag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  background: transparent;
+  color: var(--accent);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 /* ---------- Tabs ---------- */
 .tabs {
   display: flex;
@@ -785,6 +802,15 @@
   font-weight: 700;
 }
 
+.train__flag--calm,
+.use__flag--calm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border-style: dashed;
+}
+
 .use__flag {
   grid-column: 1 / -1;
 }
@@ -1099,8 +1125,16 @@
 
   .topbar__sep,
   .savestate__label,
+  .retrainflag__label,
   .topbar__close span {
     display: none;
+  }
+
+  .retrainflag {
+    width: 34px;
+    height: 34px;
+    justify-content: center;
+    padding: 0;
   }
 
   .topbar__project {

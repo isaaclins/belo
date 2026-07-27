@@ -1,5 +1,14 @@
 import { useMemo, useState } from "react";
-import { Brain, CheckCircle, Lightning, Sliders, Stop, WarningCircle } from "@phosphor-icons/react";
+import {
+  ArrowCounterClockwise,
+  Brain,
+  CheckCircle,
+  CircleNotch,
+  Lightning,
+  Sliders,
+  Stop,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { useStore, type ImageVerdict } from "../lib/store";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { DEFAULT_SETTINGS, type TrainSettings } from "../lib/types";
@@ -47,6 +56,9 @@ export function TrainView() {
   const setView = useStore((s) => s.setView);
   const hasModel = useStore((s) => s.hasModel);
   const stale = useStore((s) => s.stale);
+  const autoRetraining = useStore((s) => s.autoRetraining);
+  const hasCheckpoint = useStore((s) => s.hasCheckpoint);
+  const revertModel = useStore((s) => s.revertModel);
   const [pickedFilter, setPickedFilter] = useState<Filter | null>(null);
 
   const labels = manifest?.labels ?? [];
@@ -129,7 +141,12 @@ export function TrainView() {
               : "You need at least two labels that both hold images. Head back to the label view and collect a few more."}
           </p>
 
-          {stale ? (
+          {autoRetraining ? (
+            <p className="train__flag train__flag--calm">
+              <CircleNotch size={14} weight="bold" className="spin" /> Folding your latest
+              corrections in. The camera keeps running while this happens.
+            </p>
+          ) : stale ? (
             <p className="train__flag">
               The dataset changed since the last run. Train again to fold the new images in.
             </p>
@@ -155,6 +172,16 @@ export function TrainView() {
             {train.phase === "done" ? (
               <button className="btn btn--lg btn--primary" onClick={() => setView("use")}>
                 Use it
+              </button>
+            ) : null}
+            {hasCheckpoint ? (
+              <button
+                className="btn"
+                disabled={running || autoRetraining}
+                title="Restore the model from before the last background retrain"
+                onClick={() => void revertModel()}
+              >
+                <ArrowCounterClockwise size={16} weight="bold" /> Revert to previous model
               </button>
             ) : null}
             <div className="spacer" />

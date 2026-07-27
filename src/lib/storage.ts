@@ -42,6 +42,12 @@ export interface ProjectStorage {
   writeModel(handle: string, weights: string): Promise<void>;
   readModel(handle: string): Promise<string | null>;
 
+  /** Copy of the head kept before an automatic retrain, used by the revert action. */
+  writeCheckpoint(handle: string, weights: string): Promise<void>;
+  readCheckpoint(handle: string): Promise<string | null>;
+  hasCheckpoint(handle: string): Promise<boolean>;
+  clearCheckpoint(handle: string): Promise<void>;
+
   recentProjects(): Promise<ProjectSummary[]>;
   scanProjects(dir: string): Promise<ProjectSummary[]>;
   rememberProject(handle: string, name: string): Promise<void>;
@@ -161,6 +167,14 @@ const desktopStorage: ProjectStorage = {
   writeModel: (path, weights) => invoke("write_model", { path, weights }),
 
   readModel: (path) => invoke("read_model", { path }),
+
+  writeCheckpoint: (path, weights) => invoke("write_checkpoint", { path, weights }),
+
+  readCheckpoint: (path) => invoke("read_checkpoint", { path }),
+
+  hasCheckpoint: (path) => invoke("has_checkpoint", { path }),
+
+  clearCheckpoint: (path) => invoke("clear_checkpoint", { path }),
 
   recentProjects: () => invoke("recent_projects"),
 

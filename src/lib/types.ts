@@ -52,6 +52,8 @@ export interface ProjectManifest {
   labels: Label[];
   images: ImageRecord[];
   model: ModelMeta | null;
+  /** Metadata of the head kept at model/head.prev.json, null when there is none. */
+  checkpoint?: ModelMeta | null;
   settings: TrainSettings;
 }
 
@@ -94,6 +96,7 @@ export function newManifest(name: string, appVersion: string): ProjectManifest {
     labels: [],
     images: [],
     model: null,
+    checkpoint: null,
     settings: { ...DEFAULT_SETTINGS },
   };
 }

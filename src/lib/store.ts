@@ -96,6 +96,10 @@ interface State {
   /** True when the dataset changed after the last training run. */
   stale: boolean;
   modelLabelIds: string[];
+  /** True while a debounced background retrain is running. */
+  autoRetraining: boolean;
+  /** True when model/head.prev.json holds a head the user can go back to. */
+  hasCheckpoint: boolean;
 
   boot: () => Promise<void>;
   refreshRecents: () => Promise<void>;
@@ -130,6 +134,8 @@ interface State {
   startTraining: () => Promise<void>;
   stopTraining: () => void;
   resetTraining: () => void;
+  /** Restores model/head.prev.json as the live model and drops the checkpoint. */
+  revertModel: () => Promise<void>;
 
   predict: (source: Drawable) => Promise<Prediction | null>;
 }
@@ -138,8 +144,23 @@ interface State {
 // avoids pointless React work on every frame of a webcam session.
 const featureCache = new Map<string, Float32Array>();
 let head: tfTypes.Sequential | null = null;
-let stopRequested = false;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** How long the app waits after the last correction before retraining itself. */
+const AUTO_RETRAIN_DELAY_MS = 4000;
+
+type RunMode = "manual" | "auto";
+
+interface TrainRun {
+  mode: RunMode;
+  stop: boolean;
+  done: Promise<void>;
+}
+
+let currentRun: TrainRun | null = null;
+let autoTimer: ReturnType<typeof setTimeout> | null = null;
+/** Set when feedback lands while a run is already going, so it retries after. */
+let autoQueued = false;
 
 const idleTrainState: TrainState = {
   phase: "idle",
@@ -182,6 +203,7 @@ export const useStore = create<State>((set, get) => {
   // to go. Everything else only makes the model out of date, which is worth a
   // warning but not worth throwing away a working classifier.
   const dropModel = () => {
+    cancelAutoRetrain();
     head?.dispose();
     head = null;
     set({ hasModel: false, modelLabelIds: [], stale: false });
@@ -201,6 +223,211 @@ export const useStore = create<State>((set, get) => {
     const feature = await embedToArray(img);
     featureCache.set(record.id, feature);
     return feature;
+  };
+
+  /** Labels that actually hold images, plus the samples that can be trained on. */
+  const trainingSet = (manifest: ProjectManifest) => {
+    const usable = manifest.labels.filter((label) =>
+      manifest.images.some((img) => img.labelId === label.id),
+    );
+    const ids = new Set(usable.map((l) => l.id));
+    const samples = manifest.images.filter((img) => img.labelId && ids.has(img.labelId));
+    return { labelIds: usable.map((l) => l.id), samples };
+  };
+
+  /**
+   * One training pass. Manual runs drive the whole Train view; automatic runs
+   * stay quiet, keep a checkpoint of the head they replace and never block the
+   * live camera beyond the frame yields the fit loop already does.
+   */
+  const executeRun = async (run: TrainRun): Promise<void> => {
+    const manifest = get().manifest;
+    const path = get().path;
+    if (!manifest || !path) return;
+    const auto = run.mode === "auto";
+    const { labelIds, samples } = trainingSet(manifest);
+
+    if (labelIds.length < 2) {
+      if (!auto) get().toast("Add at least two labels with images before training", "bad");
+      return;
+    }
+
+    if (auto) set({ autoRetraining: true });
+    else {
+      set({
+        train: {
+          ...idleTrainState,
+          phase: "reading",
+          message: "Loading the feature extractor",
+          total: samples.length,
+        },
+      });
+    }
+
+    try {
+      const backend = await initBackend();
+      set({ backend });
+      await loadFeatureModel();
+
+      if (!auto) set((s) => ({ train: { ...s.train, message: "Reading images" } }));
+      const features: Float32Array[] = [];
+      const labelIndices: number[] = [];
+
+      for (let i = 0; i < samples.length; i += 1) {
+        if (run.stop) throw new Error("Training cancelled");
+        const record = samples[i];
+        features.push(await featureFor(record));
+        labelIndices.push(labelIds.indexOf(record.labelId!));
+        if (!auto) set((s) => ({ train: { ...s.train, done: i + 1 } }));
+      }
+
+      if (!auto) {
+        set((s) => ({
+          train: { ...s.train, phase: "training", message: "Training the classifier", done: 0 },
+        }));
+      }
+
+      const result = await trainHead({
+        features,
+        labelIndices,
+        numClasses: labelIds.length,
+        settings: manifest.settings,
+        shouldStop: () => run.stop,
+        onProgress: (progress) => {
+          if (auto) return;
+          set((s) => ({
+            train: {
+              ...s.train,
+              done: progress.epoch,
+              total: progress.totalEpochs,
+              history: [...s.train.history, progress],
+              accuracy: progress.accuracy,
+              valAccuracy: progress.valAccuracy,
+            },
+          }));
+        },
+      });
+
+      if (run.stop && auto) {
+        result.model.dispose();
+        return;
+      }
+
+      // Keep what is about to be replaced, so one tap can undo a silent run.
+      if (auto) {
+        try {
+          const previous = await storage.readModel(path);
+          if (previous) {
+            await storage.writeCheckpoint(path, previous);
+            touch({ checkpoint: get().manifest?.model ?? null });
+            set({ hasCheckpoint: true });
+          }
+        } catch (err) {
+          get().toast(`Could not save a checkpoint: ${errorText(err)}`, "bad");
+        }
+      }
+
+      head?.dispose();
+      head = result.model;
+
+      if (!auto) {
+        set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each image" } }));
+      }
+      const scores = predictBatch(result.model, features);
+      const verdicts: ImageVerdict[] = samples.map((record, i) => {
+        const row = scores[i] ?? [];
+        let best = 0;
+        row.forEach((value, index) => {
+          if (value > row[best]) best = index;
+        });
+        return {
+          imageId: record.id,
+          actualLabelId: record.labelId!,
+          predictedLabelId: labelIds[best] ?? "",
+          confidence: row[best] ?? 0,
+          correct: labelIds[best] === record.labelId,
+        };
+      });
+
+      const stored = serializeHead(result.model, labelIds, manifest.settings.hiddenUnits);
+      await storage.writeModel(path, JSON.stringify(stored));
+
+      touch({
+        model: {
+          trainedAt: new Date().toISOString(),
+          labelIds,
+          epochs: result.history.length,
+          accuracy: result.accuracy,
+          valAccuracy: result.valAccuracy,
+          imageCount: samples.length,
+          settings: manifest.settings,
+        },
+      });
+
+      set((s) => ({
+        hasModel: true,
+        stale: false,
+        modelLabelIds: labelIds,
+        train: {
+          ...s.train,
+          phase: "done",
+          message: auto ? "Refreshed in the background" : "Ready to use",
+          accuracy: result.accuracy,
+          valAccuracy: result.valAccuracy,
+          verdicts,
+        },
+      }));
+      await get().saveNow();
+    } catch (err) {
+      if (auto) {
+        // A cancelled or failed background run is not worth a red banner: the
+        // old head is still live and the next correction tries again.
+        if (!run.stop) get().toast(`Background retraining stopped: ${errorText(err)}`, "bad");
+        return;
+      }
+      set((s) => ({ train: { ...s.train, phase: "error", message: errorText(err) } }));
+      get().toast(errorText(err), "bad");
+    } finally {
+      if (auto) set({ autoRetraining: false });
+    }
+  };
+
+  const beginRun = (mode: RunMode): Promise<void> => {
+    const run: TrainRun = { mode, stop: false, done: Promise.resolve() };
+    currentRun = run;
+    run.done = executeRun(run).finally(() => {
+      if (currentRun === run) currentRun = null;
+      if (autoQueued) {
+        autoQueued = false;
+        scheduleAutoRetrain();
+      }
+    });
+    return run.done;
+  };
+
+  const cancelAutoRetrain = () => {
+    if (autoTimer) clearTimeout(autoTimer);
+    autoTimer = null;
+    autoQueued = false;
+  };
+
+  /**
+   * Debounced background retrain. Called whenever the user confirms or corrects
+   * a prediction, so a burst of taps produces exactly one run.
+   */
+  const scheduleAutoRetrain = () => {
+    if (!get().hasModel) return;
+    if (autoTimer) clearTimeout(autoTimer);
+    autoTimer = setTimeout(() => {
+      autoTimer = null;
+      if (!get().hasModel || !get().path) return;
+      if (currentRun) {
+        // A manual run owns the model right now, try again once it is done.
+        autoQueued = true;
+        return;
+      }
+      void beginRun("auto");
+    }, AUTO_RETRAIN_DELAY_MS);
   };
 
   const writeImageRecord = async (
@@ -233,6 +460,8 @@ export const useStore = create<State>((set, get) => {
     hasModel: false,
     stale: false,
     modelLabelIds: [],
+    autoRetraining: false,
+    hasCheckpoint: false,
 
     async boot() {
       try {
@@ -293,6 +522,7 @@ export const useStore = create<State>((set, get) => {
           dirty: false,
           activeLabelId: null,
           train: idleTrainState,
+          hasCheckpoint: false,
         });
         await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
@@ -315,6 +545,7 @@ export const useStore = create<State>((set, get) => {
           dirty: false,
           activeLabelId: manifest.labels[0]?.id ?? null,
           train: idleTrainState,
+          hasCheckpoint: false,
         });
         await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
@@ -330,6 +561,7 @@ export const useStore = create<State>((set, get) => {
             set({ hasModel: true, stale: false, modelLabelIds: parsed.labelIds });
           }
         }
+        set({ hasCheckpoint: await storage.hasCheckpoint(path) });
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
@@ -355,6 +587,7 @@ export const useStore = create<State>((set, get) => {
         activeLabelId: null,
         train: idleTrainState,
         view: "label",
+        hasCheckpoint: false,
       });
       void get().refreshRecents();
     },
@@ -522,6 +755,9 @@ export const useStore = create<State>((set, get) => {
         const record = await writeImageRecord(jpeg, labelId, origin);
         touch({ images: [...get().manifest!.images, record] });
         markStale();
+        // Corrections from the Use view fold themselves in without a trip to
+        // the Train view, once the taps stop coming.
+        if (origin === "feedback") scheduleAutoRetrain();
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
@@ -561,134 +797,58 @@ export const useStore = create<State>((set, get) => {
     },
 
     async startTraining() {
-      const manifest = get().manifest;
-      const path = get().path;
-      if (!manifest || !path) return;
-
-      const usable = manifest.labels.filter((label) =>
-        manifest.images.some((img) => img.labelId === label.id),
-      );
-      const samples = manifest.images.filter(
-        (img) => img.labelId && usable.some((l) => l.id === img.labelId),
-      );
-      if (usable.length < 2) {
-        get().toast("Add at least two labels with images before training", "bad");
-        return;
+      // A background run is only ever a convenience, so a manual run wins.
+      if (currentRun?.mode === "auto") {
+        currentRun.stop = true;
+        await currentRun.done;
       }
-
-      stopRequested = false;
-      set({
-        train: {
-          ...idleTrainState,
-          phase: "reading",
-          message: "Loading the feature extractor",
-          total: samples.length,
-        },
-      });
-
-      try {
-        const backend = await initBackend();
-        set({ backend });
-        await loadFeatureModel();
-
-        set((s) => ({ train: { ...s.train, message: "Reading images" } }));
-        const features: Float32Array[] = [];
-        const labelIndices: number[] = [];
-        const labelIds = usable.map((l) => l.id);
-
-        for (let i = 0; i < samples.length; i += 1) {
-          if (stopRequested) throw new Error("Training cancelled");
-          const record = samples[i];
-          features.push(await featureFor(record));
-          labelIndices.push(labelIds.indexOf(record.labelId!));
-          set((s) => ({ train: { ...s.train, done: i + 1 } }));
-        }
-
-        set((s) => ({
-          train: { ...s.train, phase: "training", message: "Training the classifier", done: 0 },
-        }));
-
-        const result = await trainHead({
-          features,
-          labelIndices,
-          numClasses: labelIds.length,
-          settings: manifest.settings,
-          shouldStop: () => stopRequested,
-          onProgress: (progress) => {
-            set((s) => ({
-              train: {
-                ...s.train,
-                done: progress.epoch,
-                total: progress.totalEpochs,
-                history: [...s.train.history, progress],
-                accuracy: progress.accuracy,
-                valAccuracy: progress.valAccuracy,
-              },
-            }));
-          },
-        });
-
-        head?.dispose();
-        head = result.model;
-
-        set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each image" } }));
-        const scores = predictBatch(result.model, features);
-        const verdicts: ImageVerdict[] = samples.map((record, i) => {
-          const row = scores[i] ?? [];
-          let best = 0;
-          row.forEach((value, index) => {
-            if (value > row[best]) best = index;
-          });
-          return {
-            imageId: record.id,
-            actualLabelId: record.labelId!,
-            predictedLabelId: labelIds[best] ?? "",
-            confidence: row[best] ?? 0,
-            correct: labelIds[best] === record.labelId,
-          };
-        });
-
-        const stored = serializeHead(result.model, labelIds, manifest.settings.hiddenUnits);
-        await storage.writeModel(path, JSON.stringify(stored));
-
-        touch({
-          model: {
-            trainedAt: new Date().toISOString(),
-            labelIds,
-            epochs: result.history.length,
-            accuracy: result.accuracy,
-            valAccuracy: result.valAccuracy,
-            imageCount: samples.length,
-            settings: manifest.settings,
-          },
-        });
-
-        set((s) => ({
-          hasModel: true,
-          stale: false,
-          modelLabelIds: labelIds,
-          train: {
-            ...s.train,
-            phase: "done",
-            message: "Ready to use",
-            accuracy: result.accuracy,
-            valAccuracy: result.valAccuracy,
-            verdicts,
-          },
-        }));
-        await get().saveNow();
-      } catch (err) {
-        set((s) => ({ train: { ...s.train, phase: "error", message: errorText(err) } }));
-        get().toast(errorText(err), "bad");
-      }
+      if (currentRun) return;
+      await beginRun("manual");
     },
 
     stopTraining() {
-      stopRequested = true;
+      if (currentRun) currentRun.stop = true;
     },
 
     resetTraining() {
       set({ train: idleTrainState });
+    },
+
+    async revertModel() {
+      const { path, manifest } = get();
+      if (!path || !manifest) return;
+      cancelAutoRetrain();
+      try {
+        const text = await storage.readCheckpoint(path);
+        if (!text) {
+          set({ hasCheckpoint: false });
+          get().toast("There is no earlier model to go back to", "bad");
+          return;
+        }
+        await loadFeatureModel();
+        const parsed = JSON.parse(text) as StoredHead;
+        const restored = deserializeHead(parsed, manifest.settings);
+        if (!restored) {
+          get().toast("The earlier model no longer fits this project", "bad");
+          return;
+        }
+        head?.dispose();
+        head = restored;
+        await storage.writeModel(path, text);
+        await storage.clearCheckpoint(path);
+        touch({ model: manifest.checkpoint ?? manifest.model, checkpoint: null });
+        set({
+          hasModel: true,
+          hasCheckpoint: false,
+          stale: true,
+          modelLabelIds: parsed.labelIds,
+          train: idleTrainState,
+        });
+        get().toast("Went back to the previous model", "good");
+        await get().saveNow();
+      } catch (err) {
+        get().toast(errorText(err), "bad");
+      }
     },
 
     async predict(source) {

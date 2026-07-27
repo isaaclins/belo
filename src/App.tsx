@@ -44,6 +44,18 @@ function SaveState() {
   );
 }
 
+/** Quiet marker for the debounced background retrain. Never blocks anything. */
+function RetrainFlag() {
+  const autoRetraining = useStore((s) => s.autoRetraining);
+  if (!autoRetraining) return null;
+  return (
+    <span className="retrainflag" role="status" aria-live="polite" title="Folding your corrections into the model">
+      <CircleNotch size={13} weight="bold" className="spin" />
+      <span className="retrainflag__label">Retraining</span>
+    </span>
+  );
+}
+
 function ProjectName() {
   const manifest = useStore((s) => s.manifest);
   const renameProject = useStore((s) => s.renameProject);
@@ -140,6 +152,7 @@ export default function App() {
             <span className="topbar__sep" aria-hidden="true" />
             <ProjectName />
             <SaveState />
+            <RetrainFlag />
             <div className="spacer" />
             <nav className="tabs" aria-label="Project stages">
               {TABS.map((tab) => {
