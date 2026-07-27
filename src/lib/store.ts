@@ -977,7 +977,10 @@ export const useStore = create<State>((set, get) => {
         head = restored;
         await storage.writeModel(path, text);
         await storage.clearCheckpoint(path);
-        touch({ model: manifest.checkpoint ?? manifest.model, checkpoint: null });
+        // A checkpoint written for a project that had no model metadata leaves
+        // nothing to restore, and keeping the newer numbers would describe the
+        // wrong weights, so the honest value is none.
+        touch({ model: manifest.checkpoint ?? null, checkpoint: null });
         set({
           hasModel: true,
           hasCheckpoint: false,
