@@ -135,5 +135,19 @@ export function AttentionOverlay({
     return () => observer.disconnect();
   }, [draw]);
 
+  // Switching camera changes the video's intrinsic size without touching the
+  // canvas, so the square the model saw has to be worked out again.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const repaint = () => draw();
+    video.addEventListener("resize", repaint);
+    video.addEventListener("loadedmetadata", repaint);
+    return () => {
+      video.removeEventListener("resize", repaint);
+      video.removeEventListener("loadedmetadata", repaint);
+    };
+  }, [draw, videoRef]);
+
   return <canvas ref={canvasRef} className="use__attn" aria-hidden="true" />;
 }

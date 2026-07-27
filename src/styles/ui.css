@@ -266,6 +266,65 @@
   color: var(--ink);
 }
 
+/* ---------- Camera picker ---------- */
+/* Same control in the capture modal and in the Use header: stacked field by
+   default, one tight row in a card head. */
+.campick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.campick__label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.campick__select {
+  cursor: pointer;
+}
+
+.campick__select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.campick--compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.campick--compact .campick__label {
+  font-size: 11px;
+}
+
+.campick--compact .campick__select {
+  width: auto;
+  max-width: 168px;
+  padding: 4px 6px;
+  border-width: var(--border-w-thin);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .campick--compact .campick__label {
+    /* The icon carries the meaning once the header gets tight. */
+    font-size: 0;
+    gap: 0;
+  }
+
+  .campick--compact .campick__select {
+    max-width: 120px;
+  }
+}
+
 /* ---------- Badge / chip ---------- */
 .badge {
   display: inline-flex;

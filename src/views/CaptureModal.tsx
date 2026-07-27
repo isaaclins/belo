@@ -4,6 +4,7 @@ import { useStore } from "../lib/store";
 import { useWebcam } from "../lib/useWebcam";
 import { toSquareCanvas } from "../lib/images";
 import { Modal, swatch } from "../components/ui";
+import { CameraPicker } from "../components/CameraPicker";
 import type { Label } from "../lib/types";
 
 const BURST_INTERVAL_MS = 130;
@@ -11,7 +12,7 @@ const STRIP_SIZE = 14;
 
 export function CaptureModal({ label, onClose }: { label: Label; onClose: () => void }) {
   const addFromDrawable = useStore((s) => s.addFromDrawable);
-  const { videoRef, status, error, cameras, deviceId, setDeviceId, retry } = useWebcam(true);
+  const { videoRef, status, error, cameras, deviceId, selectCamera, switching, retry } = useWebcam(true);
   const [count, setCount] = useState(0);
   const [strip, setStrip] = useState<string[]>([]);
   const [bursting, setBursting] = useState(false);
@@ -98,7 +99,7 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
               ) : (
                 <>
                   <VideoCamera size={26} weight="bold" />
-                  <p>Waking the camera</p>
+                  <p>{switching ? "Switching camera" : "Waking the camera"}</p>
                 </>
               )}
             </div>
@@ -123,25 +124,12 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
             Hold the button or the space bar and move the object around. Roughly 8 frames per second.
           </p>
 
-          {cameras.length > 1 ? (
-            <div className="field">
-              <label className="field__label" htmlFor="camera-pick">
-                Camera
-              </label>
-              <select
-                id="camera-pick"
-                className="input"
-                value={deviceId ?? cameras[0]?.deviceId ?? ""}
-                onChange={(event) => setDeviceId(event.target.value)}
-              >
-                {cameras.map((camera) => (
-                  <option key={camera.deviceId} value={camera.deviceId}>
-                    {camera.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
+          <CameraPicker
+            cameras={cameras}
+            deviceId={deviceId}
+            onPick={selectCamera}
+            disabled={bursting}
+          />
         </div>
       </div>
 

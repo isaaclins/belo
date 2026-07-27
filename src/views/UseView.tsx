@@ -14,6 +14,7 @@ import { MULTI_THRESHOLD } from "../lib/types";
 import { useStore, type Prediction } from "../lib/store";
 import { useWebcam } from "../lib/useWebcam";
 import { AttentionOverlay } from "../components/AttentionOverlay";
+import { CameraPicker } from "../components/CameraPicker";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { isImageFile, loadImageElement, toSquareCanvas } from "../lib/images";
 import { storage } from "../lib/storage";
@@ -153,7 +154,8 @@ export function UseView() {
   const setAttentionOn = useStore((s) => s.setAttentionOn);
 
   const [live, setLive] = useState(false);
-  const { videoRef, status, error, retry } = useWebcam(live);
+  const { videoRef, status, error, cameras, deviceId, selectCamera, switching, retry } =
+    useWebcam(live);
   const [livePrediction, setLivePrediction] = useState<Prediction | null>(null);
 
   const [stillUrl, setStillUrl] = useState<string | null>(null);
@@ -291,6 +293,14 @@ export function UseView() {
           </h3>
           <div className="card__tools">
             {live ? (
+              <CameraPicker
+                cameras={cameras}
+                deviceId={deviceId}
+                onPick={selectCamera}
+                compact
+              />
+            ) : null}
+            {live ? (
               <label className="switch">
                 <input
                   type="checkbox"
@@ -340,7 +350,7 @@ export function UseView() {
           ) : status !== "live" ? (
             <div className="use__veil">
               <VideoCamera size={28} weight="bold" />
-              <p>Waking the camera</p>
+              <p>{switching ? "Switching camera" : "Waking the camera"}</p>
             </div>
           ) : null}
 
