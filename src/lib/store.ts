@@ -30,17 +30,19 @@ import {
   type Drawable,
 } from "./images";
 import { initBackend } from "./ml/backend";
-import { embedToArray, loadFeatureModel } from "./ml/features";
+import { embedToArray, embedWithSpatial, loadFeatureModel } from "./ml/features";
+import type { Attention, AttentionMap } from "./attention";
 import {
   deserializeHead,
   predictBatch,
+  predictCells,
   predictOne,
   serializeHead,
   trainHead,
   type TrainProgress,
 } from "./ml/classifier";
 
-export const APP_VERSION = "0.3.1";
+export const APP_VERSION = "0.4.0";
 
 export type View = "label" | "train" | "use";
 
@@ -98,6 +100,8 @@ export interface Prediction {
   labelId: string;
   confidence: number;
   scores: { labelId: string; score: number }[];
+  /** Per label score maps over the feature grid, only when they were asked for. */
+  attention: Attention | null;
 }
 
 interface State {
@@ -122,6 +126,8 @@ interface State {
   autoRetraining: boolean;
   /** True when model/head.prev.json holds a head the user can go back to. */
   hasCheckpoint: boolean;
+  /** Live camera attention overlay. Session state, never written to the manifest. */
+  attentionOn: boolean;
 
   boot: () => Promise<void>;
   refreshRecents: () => Promise<void>;
@@ -166,7 +172,9 @@ interface State {
   /** Restores model/head.prev.json as the live model and drops the checkpoint. */
   revertModel: () => Promise<void>;
 
-  predict: (source: Drawable) => Promise<Prediction | null>;
+  setAttentionOn: (on: boolean) => void;
+  /** Asking for attention adds one batched head pass over the same features. */
+  predict: (source: Drawable, wantAttention?: boolean) => Promise<Prediction | null>;
 }
 
 // Non reactive side tables. Keeping tensors and typed arrays out of the store
@@ -569,6 +577,7 @@ export const useStore = create<State>((set, get) => {
     modelLabelIds: [],
     autoRetraining: false,
     hasCheckpoint: false,
+    attentionOn: false,
 
     async boot() {
       try {
@@ -995,22 +1004,55 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    async predict(source) {
+    setAttentionOn(on) {
+      set({ attentionOn: on });
+    },
+
+    async predict(source, wantAttention = false) {
       const manifest = get().manifest;
       if (!manifest || !head) return null;
       const labelIds = get().modelLabelIds;
-      const feature = await embedToArray(source);
-      const row = predictOne(head, feature);
-      if (row.length === 0) return null;
-      let best = 0;
-      row.forEach((value, index) => {
-        if (value > row[best]) best = index;
-      });
-      return {
-        labelId: labelIds[best] ?? "",
-        confidence: row[best] ?? 0,
-        scores: labelIds.map((labelId, i) => ({ labelId, score: row[i] ?? 0 })),
-      };
+      const { pooled, spatial } = await embedWithSpatial(source, wantAttention);
+      try {
+        const row = predictOne(head, pooled);
+        if (row.length === 0) return null;
+        let best = 0;
+        row.forEach((value, index) => {
+          if (value > row[best]) best = index;
+        });
+
+        let attention: Attention | null = null;
+        if (spatial && head) {
+          // One batched pass: rows * cols tiny head inferences at once, on the
+          // activation the pooled embedding was already made from.
+          const cellScores = predictCells(head, spatial.cells);
+          // Single mode has one winner worth showing. Multi mode shows every
+          // label that answered yes on this frame.
+          const shown =
+            manifest.mode === "multi"
+              ? labelIds.filter((_, i) => (row[i] ?? 0) >= MULTI_THRESHOLD)
+              : labelIds[best]
+                ? [labelIds[best]]
+                : [];
+          const maps: AttentionMap[] = shown.map((labelId) => {
+            const index = labelIds.indexOf(labelId);
+            return {
+              labelId,
+              values: cellScores.map((cell) => cell[index] ?? 0),
+            };
+          });
+          attention = { rows: spatial.rows, cols: spatial.cols, maps };
+        }
+
+        return {
+          labelId: labelIds[best] ?? "",
+          confidence: row[best] ?? 0,
+          scores: labelIds.map((labelId, i) => ({ labelId, score: row[i] ?? 0 })),
+          attention,
+        };
+      } finally {
+        spatial?.cells.dispose();
+      }
     },
   };
 });

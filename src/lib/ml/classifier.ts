@@ -139,6 +139,14 @@ export function predictBatch(model: tf.Sequential, features: Float32Array[]): nu
   });
 }
 
+/**
+ * Runs the head over every spatial cell of one frame in a single batched pass
+ * and returns one score row per cell, in the same row major order.
+ */
+export function predictCells(model: tf.Sequential, cells: tf.Tensor2D): number[][] {
+  return tf.tidy(() => (model.predict(cells) as tf.Tensor2D).arraySync() as number[][]);
+}
+
 export function predictOne(model: tf.Sequential, feature: Float32Array): number[] {
   return predictBatch(model, [feature])[0] ?? [];
 }
