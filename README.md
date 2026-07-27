@@ -4,22 +4,55 @@ An app for training image classifiers on your own pictures. Collect images, labe
 them, train, and use the result live from your camera. Everything runs on the device:
 no account, no upload, no network calls at runtime.
 
-Version 0.2.0. Desktop and iOS are supported. Android is code-complete but has not yet
+Version 0.3.0. Desktop and iOS are supported. Android is code-complete but has not yet
 been built on an Android toolchain.
 
 ## What it does
 
 1. **Label.** Create labels, then fill them by dragging in files or whole folders,
    importing from disk, or holding the capture button for a webcam burst. Images can be
-   selected and moved between labels or deleted.
-2. **Train.** One click trains a classifier and reports live progress, training accuracy
-   and a holdout score. Every image is scored afterwards so you can see exactly which
-   ones the model still gets wrong, per label.
+   selected and moved between labels or deleted. In a multi label project the same
+   selection toggles several labels on and off instead of moving between them.
+2. **Train.** One click trains a classifier and reports live progress, training accuracy,
+   a holdout score and a per label score. Every image is scored afterwards so you can see
+   exactly which ones the model still gets wrong.
 3. **Use.** Point the webcam at something and watch the live prediction and confidence
    bars, or drop a single image in for a one-shot verdict. Either way you can confirm or
-   correct the prediction, which adds that frame to the dataset for the next run.
+   correct the prediction, which adds that frame to the dataset and quietly retrains the
+   head a few seconds later.
 
 Model export is out of scope for this version.
+
+## Classification modes
+
+The mode is picked when the project is created and shown in the project header. It cannot
+be switched afterwards.
+
+- **Single label** (default): a softmax over the labels. Every image belongs to exactly
+   one label and the model reports one winner with a confidence. This is what every
+   project before 0.3.0 does, and those projects keep behaving identically.
+- **Multi label**: one sigmoid output per label, binary cross entropy loss and a fixed
+   0.5 threshold per label. An image can carry any number of labels, so "X and Y but not
+   Z" is expressible. The Train view reports accuracy per label, meaning the share of
+   images whose yes or no call for that label was right. The Use view shows an
+   independent yes or no with a confidence for every label rather than a winner, and the
+   teach chips become toggles that add one frame with the whole set you picked.
+
+Images with no labels are ignored by training in both modes.
+
+## Background retraining and the checkpoint
+
+Confirming or correcting a prediction in the Use view adds that frame to the dataset and
+schedules a retrain about four seconds after the last correction, so a burst of taps
+produces one run and not one per tap. The run reuses the normal training path, keeps the
+UI interactive, and shows a small "retraining" marker in the header while it works. The
+live camera keeps classifying with the current model until the new one is ready. If a
+manual training run is going, the automatic one waits for it and then retries.
+
+Before each automatic run the current head is copied to `model/head.prev.json`. The Train
+view then offers **Revert to previous model**, which puts that head back, writes it to
+`model/head.json` and drops the checkpoint. Manual training runs do not write a
+checkpoint, so the action always means "undo what the app did on its own".
 
 ## How the model works
 
@@ -28,8 +61,9 @@ The classifier is a two-part stack:
 - A frozen **MobileNet v1 (1.0, 224)** truncated at `conv_pw_13_relu` and spatially
   averaged, giving a 1024 value embedding per image. Its weights ship inside the app at
   `public/models/mobilenet-v1-1.0-224`, so it never fetches anything.
-- A small trainable **dense head** (default 100 hidden units, softmax output) trained with
-  Adam. Only this part learns, which is why training takes seconds rather than hours.
+- A small trainable **dense head** (default 100 hidden units) trained with Adam. Only this
+  part learns, which is why training takes seconds rather than hours. The output layer is
+  a softmax in single label projects and one sigmoid per label in multi label projects.
 
 TensorFlow.js picks the **WebGL** backend and falls back to **WASM** if WebGL is
 unavailable. The WASM binaries are copied into `public/tfjs-wasm` by `npm run assets`,
@@ -53,6 +87,7 @@ Shapes.belo/
     img_xxx.jpg       one normalized 224x224 JPEG per image record
   model/
     head.json         serialized dense head weights, written after a training run
+    head.prev.json    checkpoint of the head replaced by the last automatic retrain
 ```
 
 `project.json`:
@@ -60,23 +95,26 @@ Shapes.belo/
 ```jsonc
 {
   "format": "belo-project",
-  "formatVersion": 1,
-  "appVersion": "0.2.0",
+  "formatVersion": 2,
+  "appVersion": "0.3.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
+  "mode": "single",              // single | multi, fixed at creation
   "labels": [{ "id": "lbl_...", "name": "Circle", "color": 0, "createdAt": "..." }],
   "images": [
     {
       "id": "img_...",
       "file": "img_....jpg",     // relative to images/
       "labelId": "lbl_...",      // null means unlabeled
+      "labelIds": ["lbl_..."],   // multi mode only, the full label set
       "source": "import",        // import | capture | feedback
       "addedAt": "..."
     }
   ],
   "model": {
     "trainedAt": "...",
+    "mode": "single",
     "labelIds": ["lbl_..."],     // output order of the head
     "epochs": 40,
     "accuracy": 1,
@@ -84,12 +122,22 @@ Shapes.belo/
     "imageCount": 44,
     "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15 }
   },
+  "checkpoint": null,            // same shape as model, describes head.prev.json
   "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15 }
 }
 ```
 
-`model/head.json` stores the head weights as plain arrays plus the label order they were
-trained against, so reopening a project restores a working classifier without retraining.
+`model/head.json` stores the head weights as plain arrays, the label order they were
+trained against and the mode they were trained in, so reopening a project restores a
+working classifier without retraining.
+
+### Schema versions
+
+- **1**: single label projects. One `labelId` per image, no `mode`, no `checkpoint`.
+- **2**: adds `mode`, per image `labelIds` in multi mode, `checkpoint`, and `mode` on the
+  stored head. A version 1 manifest loads as `mode: "single"` with `labelIds` derived from
+  `labelId`, which is exactly its old behavior, and is written back as version 2 on the
+  next save. A head written without a mode is read as softmax.
 
 New projects are created in `~/Documents/Belo` by default. Any `.belo` folder elsewhere
 can be opened with the file picker.
@@ -124,6 +172,7 @@ src/
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
     capture.ts            CameraSource seam: the only module that calls getUserMedia
     store.ts              application store: project, disk writes, feature cache, head
+    zoom.ts               kills user page zoom: pinch, double tap and zoom shortcuts
     images.ts             normalization, drag and drop extraction
     useWebcam.ts          camera session lifecycle on top of capture.ts
     types.ts              manifest schema
@@ -160,8 +209,12 @@ npm install
 
 The generated Xcode project is committed under `src-tauri/gen/apple`, so normal builds do
 not need to run `tauri ios init`. Re-running init replaces generated customizations and
-must be followed by restoring the 15.0 deployment target, `app.belo` bundle identifier
-and camera usage description from `project.yml`.
+must be followed by restoring the 15.0 deployment target, `app.belo` bundle identifier,
+camera usage description and `ASSETCATALOG_COMPILER_APPICON_NAME` from `project.yml`.
+That last setting is what assigns `Assets.xcassets/AppIcon.appiconset` to the app: without
+it the catalog still compiles but the installed app has no home screen icon. After editing
+`project.yml`, run `~/.local/bin/xcodegen generate` inside `src-tauri/gen/apple` and commit
+the regenerated `project.pbxproj` and `belo_iOS/Info.plist`.
 
 Build an unsigned simulator app:
 
