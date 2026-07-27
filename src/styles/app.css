@@ -561,6 +561,17 @@
   border-style: dashed;
 }
 
+/* Teach chips hold their slot for the whole session, so the only thing that
+   changes per frame is which one is lit. */
+.chip--teach {
+  min-height: 34px;
+}
+
+.chip--on {
+  border-width: var(--border-w);
+  box-shadow: var(--shadow-sm);
+}
+
 .drop {
   position: relative;
   min-height: 0;

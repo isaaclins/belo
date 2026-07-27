@@ -19,12 +19,12 @@ const TICK_MS = 220;
 function Scores({ prediction }: { prediction: Prediction | null }) {
   const manifest = useStore((s) => s.manifest);
   if (!prediction) return null;
-  const rows = prediction.scores
-    .map((row) => ({
-      row,
-      label: manifest?.labels.find((l) => l.id === row.labelId) ?? null,
-    }))
-    .sort((a, b) => b.row.score - a.row.score);
+  // Label creation order, never score order: a list that reshuffles every frame
+  // is unreadable and, next to the teach buttons, unclickable.
+  const rows = prediction.scores.map((row) => ({
+    row,
+    label: manifest?.labels.find((l) => l.id === row.labelId) ?? null,
+  }));
 
   return (
     <ul className="scores">
@@ -49,27 +49,32 @@ function FeedbackBar({
 }) {
   const manifest = useStore((s) => s.manifest);
   if (!prediction || !manifest) return null;
-  const others = manifest.labels.filter((l) => l.id !== prediction.labelId);
-  const top = manifest.labels.find((l) => l.id === prediction.labelId);
 
+  // Fixed order and fixed captions. The predicted label is highlighted in place
+  // so a button never moves out from under a finger mid tap.
   return (
     <div className="feedback">
       <span className="eyebrow">Teach it from this frame</span>
       <div className="feedback__chips">
-        {top ? (
-          <button
-            className="chip"
-            style={{ background: swatch(top.color) }}
-            onClick={() => onTeach(top.id)}
-          >
-            <PlusCircle size={14} weight="bold" /> Right, it is {top.name}
-          </button>
-        ) : null}
-        {others.map((label) => (
-          <button key={label.id} className="chip chip--ghost" onClick={() => onTeach(label.id)}>
-            No, {label.name}
-          </button>
-        ))}
+        {manifest.labels.map((label) => {
+          const top = label.id === prediction.labelId;
+          return (
+            <button
+              key={label.id}
+              className={`chip chip--teach${top ? " chip--on" : ""}`}
+              style={top ? { background: swatch(label.color) } : undefined}
+              aria-pressed={top}
+              onClick={() => onTeach(label.id)}
+            >
+              {top ? (
+                <PlusCircle size={14} weight="bold" />
+              ) : (
+                <span className="dot" style={{ background: swatch(label.color) }} />
+              )}
+              This is {label.name}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
