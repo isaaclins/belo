@@ -26,15 +26,18 @@ function SaveState() {
     >
       {saving ? (
         <>
-          <CircleNotch size={14} weight="bold" className="spin" /> Saving
+          <CircleNotch size={14} weight="bold" className="spin" />
+          <span className="savestate__label">Saving</span>
         </>
       ) : dirty ? (
         <>
-          <FloppyDisk size={14} weight="bold" /> Unsaved
+          <FloppyDisk size={14} weight="bold" />
+          <span className="savestate__label">Unsaved</span>
         </>
       ) : (
         <>
-          <CheckCircle size={14} weight="bold" /> Saved
+          <CheckCircle size={14} weight="bold" />
+          <span className="savestate__label">Saved</span>
         </>
       )}
     </button>
@@ -158,8 +161,8 @@ export default function App() {
                 );
               })}
             </nav>
-            <button className="btn btn--sm" onClick={closeProject}>
-              <SignOut size={15} weight="bold" /> Close
+            <button className="btn btn--sm topbar__close" onClick={closeProject} aria-label="Close project">
+              <SignOut size={15} weight="bold" /> <span>Close</span>
             </button>
           </>
         ) : (

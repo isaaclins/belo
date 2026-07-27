@@ -122,6 +122,28 @@ button {
   border: 0;
 }
 
+@media (max-width: 700px) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+
+  body {
+    font-size: 14px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

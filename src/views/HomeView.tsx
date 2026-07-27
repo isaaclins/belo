@@ -89,7 +89,9 @@ export function HomeView() {
           ) : null}
         </div>
         <p className="home__dir mono">
-          Projects live in {projectsDir ?? "your documents folder"}
+          {storage.mobile
+            ? "Projects stay in Belo's on-device documents"
+            : `Projects live in ${projectsDir ?? "your documents folder"}`}
         </p>
       </section>
 
@@ -149,7 +151,9 @@ export function HomeView() {
               }}
             />
             <span className="field__hint">
-              Saved as a .belo folder in {projectsDir ?? "your documents folder"}
+              {storage.mobile
+                ? "Saved in Belo's on-device documents"
+                : `Saved as a .belo folder in ${projectsDir ?? "your documents folder"}`}
             </span>
           </div>
         </Modal>

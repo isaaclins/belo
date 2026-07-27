@@ -339,6 +339,66 @@
   }
 }
 
+@media (max-width: 700px) {
+  .btn,
+  .iconbtn,
+  .chip,
+  .input {
+    min-height: 44px;
+  }
+
+  .btn--sm {
+    padding: 8px 11px;
+  }
+
+  .iconbtn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .overlay {
+    align-items: center;
+    padding: max(var(--s3), env(safe-area-inset-top)) var(--s3)
+      max(var(--s3), env(safe-area-inset-bottom));
+  }
+
+  .modal {
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+
+  .modal__body {
+    padding: var(--s4) var(--s3);
+  }
+
+  .modal__foot {
+    flex-wrap: wrap;
+    padding: var(--s3);
+  }
+
+  .empty {
+    gap: var(--s3);
+    padding: var(--s5) var(--s3);
+  }
+
+  .empty__mark {
+    width: 62px;
+    height: 62px;
+  }
+
+  .toasts {
+    right: var(--s3);
+    bottom: calc(72px + env(safe-area-inset-bottom));
+    left: var(--s3);
+  }
+
+  .toast {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
 /* ---------- Misc layout helpers ---------- */
 .row {
   display: flex;
