@@ -126,8 +126,28 @@ export function BusyBar() {
   );
 }
 
+/** Mirrors --swatch-0 through --swatch-7 in styles/tokens.css. */
+const SWATCH_HEX = [
+  "#ffd83d",
+  "#2f6bff",
+  "#ff5c8a",
+  "#17c26a",
+  "#ff8a1f",
+  "#8b5cf6",
+  "#00c2c7",
+  "#ff4a3d",
+];
+
+/** Mirrors --ink, for the canvas which cannot read CSS custom properties. */
+export const INK_HEX = "#111014";
+
 export function swatch(index: number): string {
-  return `var(--swatch-${index % 8})`;
+  return `var(--swatch-${index % SWATCH_HEX.length})`;
+}
+
+/** The same ramp as a literal color, for canvas drawing. */
+export function swatchHex(index: number): string {
+  return SWATCH_HEX[index % SWATCH_HEX.length];
 }
 
 export function pct(value: number): string {

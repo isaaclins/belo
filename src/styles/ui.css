@@ -118,6 +118,64 @@
   padding: var(--s4);
 }
 
+/* Head actions that have to sit next to each other without wrapping apart. */
+.card__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+
+/* ---------- Switch ---------- */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.switch__box {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: transparent;
+  background: var(--panel);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+}
+
+.switch__input:checked + .switch__box {
+  color: var(--ink);
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.switch__input:focus-visible + .switch__box {
+  outline: var(--border-w) solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+.switch__text {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 /* ---------- Field ---------- */
 .field {
   display: flex;

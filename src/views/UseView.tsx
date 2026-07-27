@@ -13,6 +13,7 @@ import {
 import { MULTI_THRESHOLD } from "../lib/types";
 import { useStore, type Prediction } from "../lib/store";
 import { useWebcam } from "../lib/useWebcam";
+import { AttentionOverlay } from "../components/AttentionOverlay";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { isImageFile, loadImageElement, toSquareCanvas } from "../lib/images";
 import { storage } from "../lib/storage";
@@ -146,6 +147,10 @@ export function UseView() {
   const addFromDrawable = useStore((s) => s.addFromDrawable);
   const setView = useStore((s) => s.setView);
   const toast = useStore((s) => s.toast);
+  // Session state: the toggle survives a trip through the other views and is
+  // never written to the manifest.
+  const attentionOn = useStore((s) => s.attentionOn);
+  const setAttentionOn = useStore((s) => s.setAttentionOn);
 
   const [live, setLive] = useState(false);
   const { videoRef, status, error, retry } = useWebcam(live);
@@ -170,7 +175,7 @@ export function UseView() {
       if (!video || video.videoWidth === 0) return;
       inFlight = true;
       const frame = toSquareCanvas(video);
-      void predict(frame)
+      void predict(frame, attentionOn)
         .then((result) => {
           if (!cancelled) setLivePrediction(result);
         })
@@ -183,7 +188,7 @@ export function UseView() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [live, status, hasModel, predict, videoRef]);
+  }, [live, status, hasModel, predict, videoRef, attentionOn]);
 
   useEffect(() => () => {
     if (stillUrl) URL.revokeObjectURL(stillUrl);
@@ -284,17 +289,41 @@ export function UseView() {
           <h3>
             <VideoCamera size={16} weight="bold" /> Live camera
           </h3>
-          <button
-            className={live ? "btn btn--sm btn--danger" : "btn btn--sm btn--go"}
-            onClick={() => setLive((v) => !v)}
-          >
-            {live ? <Stop size={15} weight="bold" /> : <Play size={15} weight="bold" />}
-            {live ? "Stop" : "Start"}
-          </button>
+          <div className="card__tools">
+            {live ? (
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  className="switch__input"
+                  checked={attentionOn}
+                  onChange={(event) => setAttentionOn(event.target.checked)}
+                />
+                <span className="switch__box" aria-hidden="true">
+                  <Check size={12} weight="bold" />
+                </span>
+                <span className="switch__text">Show attention</span>
+              </label>
+            ) : null}
+            <button
+              className={live ? "btn btn--sm btn--danger" : "btn btn--sm btn--go"}
+              onClick={() => setLive((v) => !v)}
+            >
+              {live ? <Stop size={15} weight="bold" /> : <Play size={15} weight="bold" />}
+              {live ? "Stop" : "Start"}
+            </button>
+          </div>
         </div>
 
         <div className="use__stage">
           <video ref={videoRef} className="use__video" playsInline muted autoPlay />
+          {live && status === "live" ? (
+            <AttentionOverlay
+              videoRef={videoRef}
+              attention={attentionOn ? (livePrediction?.attention ?? null) : null}
+              labels={manifest.labels}
+              active={attentionOn}
+            />
+          ) : null}
           {!live ? (
             <div className="use__veil">
               <VideoCamera size={28} weight="bold" />
