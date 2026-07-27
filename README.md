@@ -183,13 +183,12 @@ The minimum is iOS 15.0 because Xcode 27 no longer builds for iOS 14, while WKWe
 camera capture itself requires iOS 14.3 or newer. The simulator has no camera. Belo shows
 a clear no-camera message there and supports photo import as the test path instead.
 
-Local verification used Xcode 27.0 and the iPhone 17 Pro simulators on iOS 26.4 and 26.5.
-The app built, installed, launched, created its sandbox Documents/Belo folder and rendered
-the responsive home flow. XCUITest interaction with WKWebView is currently blocked by an
-iOS 26 simulator accessibility-bundle conflict in Xcode 27, so picker, labeling and
-training interaction still need a physical-device pass. The iOS 27.0 simulator also
-asserts when Tauri's current tao runtime uses the legacy UIKit lifecycle. Both are listed
-as known gaps rather than treated as verified behavior.
+Local verification used Xcode 27.0 and the iPhone 17 Pro simulators on iOS 26.4, 26.5
+and 27.0. The app built, installed, launched, created its sandbox Documents/Belo folder
+and rendered the responsive home flow. The generated plist opts into tao's scene-based
+UIKit lifecycle, which is required by iOS 27. XCUITest interaction with WKWebView is
+currently blocked by an iOS 26 simulator accessibility-bundle conflict in Xcode 27, so
+picker, labeling and training interaction still need a physical-device pass.
 
 ### Android
 
