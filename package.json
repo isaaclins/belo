@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Local image classifier trainer",
   "scripts": {
     "dev": "npm run assets && vite",
@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "assets": "node scripts/copy-wasm.mjs",
     "typecheck": "tsc --noEmit",
+    "check:camera": "node scripts/check-camera-seam.mjs",
     "tauri": "tauri"
   },
   "repository": {

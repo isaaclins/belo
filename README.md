@@ -4,7 +4,7 @@ An app for training image classifiers on your own pictures. Collect images, labe
 them, train, and use the result live from your camera. Everything runs on the device:
 no account, no upload, no network calls at runtime.
 
-Version 0.4.0. Desktop and iOS are supported. Android is code-complete but has not yet
+Version 0.4.1. Desktop and iOS are supported. Android is code-complete but has not yet
 been built on an Android toolchain.
 
 ## What it does
@@ -102,7 +102,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 2,
-  "appVersion": "0.4.0",
+  "appVersion": "0.4.1",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -167,6 +167,8 @@ Useful extras:
 - `node scripts/make-icon.mjs` regenerates `src-tauri/app-icon.png`, then
   `npx tauri icon src-tauri/app-icon.png` rebuilds the icon set.
 - `npm run assets` refreshes the bundled TensorFlow.js WASM binaries.
+- `npm run check:camera` runs the camera seam against a mocked `MediaDevices`, which covers
+  device switching, stale mobile ids and hot plug on a machine with a single webcam.
 
 ### Layout
 
@@ -175,6 +177,7 @@ src/
   App.tsx                 shell, top bar, stage tabs
   components/ui.tsx       modal, meter, toasts, empty state
   components/AttentionOverlay.tsx  heat map and boxes drawn over the live video
+  components/CameraPicker.tsx      camera select shown wherever live video runs
   lib/
     attention.ts          overlay geometry and thresholding, pure functions
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
@@ -295,6 +298,15 @@ To finish verification on a machine with Android Studio:
 ## Camera and permissions
 
 The webcam is used through `getUserMedia` inside the webview.
+
+Wherever live video runs, meaning the capture modal and the Use view, a **Camera** picker
+appears as soon as the machine exposes more than one video input, and choosing another one
+swaps the stream in place without leaving the view or dropping what you already captured.
+The list is read after the first successful start, because device labels stay empty until a
+permission is granted, and again on every hot plug event; the choice is remembered across
+restarts and falls back to the default camera when that device is gone. Phones hand out
+deviceIds that go stale between sessions, so a refused id retries on `facingMode`, which is
+what makes front and back switching reliable there.
 
 - **macOS** ships `NSCameraUsageDescription` via `src-tauri/Info.plist`. The first capture
   triggers the normal system permission prompt.
