@@ -15,8 +15,9 @@ async function pickBackend(): Promise<string> {
     // WebGL is unavailable in this webview, fall through to WASM.
   }
 
+  // Importing the package already registers the backend, so only the binary
+  // location needs pointing at the bundled copy.
   setWasmPaths("/tfjs-wasm/");
-  await import("@tensorflow/tfjs-backend-wasm");
   await tf.setBackend("wasm");
   await tf.ready();
   return tf.getBackend();
