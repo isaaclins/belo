@@ -4,7 +4,7 @@ An app for training image classifiers on your own pictures. Collect images, labe
 them, train, and use the result live from your camera. Everything runs on the device:
 no account, no upload, no network calls at runtime.
 
-Version 0.3.1. Desktop and iOS are supported. Android is code-complete but has not yet
+Version 0.4.0. Desktop and iOS are supported. Android is code-complete but has not yet
 been built on an Android toolchain.
 
 ## What it does
@@ -19,7 +19,11 @@ been built on an Android toolchain.
 3. **Use.** Point the webcam at something and watch the live prediction and confidence
    bars, or drop a single image in for a one-shot verdict. Either way you can confirm or
    correct the prediction, which adds that frame to the dataset and quietly retrains the
-   head a few seconds later.
+   head a few seconds later. While the camera runs, **Show attention** overlays where the
+   evidence for the current call sits: a tinted heat map plus one box per label. It reads
+   the classifier's own 7x7 feature grid, so it is a coarse hint at roughly a 32 pixel
+   resolution and never an object detector. The toggle starts off and is remembered until
+   the app closes, never in the project.
 
 Model export is out of scope for this version.
 
@@ -60,7 +64,9 @@ The classifier is a two-part stack:
 
 - A frozen **MobileNet v1 (1.0, 224)** truncated at `conv_pw_13_relu` and spatially
   averaged, giving a 1024 value embedding per image. Its weights ship inside the app at
-  `public/models/mobilenet-v1-1.0-224`, so it never fetches anything.
+  `public/models/mobilenet-v1-1.0-224`, so it never fetches anything. The same pass can
+  hand back the 7x7x1024 activation before pooling, which is what the attention overlay
+  scores cell by cell.
 - A small trainable **dense head** (default 100 hidden units) trained with Adam. Only this
   part learns, which is why training takes seconds rather than hours. The output layer is
   a softmax in single label projects and one sigmoid per label in multi label projects.
@@ -96,7 +102,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 2,
-  "appVersion": "0.3.1",
+  "appVersion": "0.4.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -168,7 +174,9 @@ Useful extras:
 src/
   App.tsx                 shell, top bar, stage tabs
   components/ui.tsx       modal, meter, toasts, empty state
+  components/AttentionOverlay.tsx  heat map and boxes drawn over the live video
   lib/
+    attention.ts          overlay geometry and thresholding, pure functions
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
     capture.ts            CameraSource seam: the only module that calls getUserMedia
     store.ts              application store: project, disk writes, feature cache, head
