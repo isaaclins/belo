@@ -42,6 +42,10 @@ export interface ProjectStorage {
   writeModel(handle: string, weights: string): Promise<void>;
   readModel(handle: string): Promise<string | null>;
 
+  /** Detection head of a detect project, kept beside the classifier head. */
+  writeDetector(handle: string, weights: string): Promise<void>;
+  readDetector(handle: string): Promise<string | null>;
+
   /** Copy of the head kept before an automatic retrain, used by the revert action. */
   writeCheckpoint(handle: string, weights: string): Promise<void>;
   readCheckpoint(handle: string): Promise<string | null>;
@@ -169,6 +173,10 @@ const desktopStorage: ProjectStorage = {
   writeModel: (path, weights) => invoke("write_model", { path, weights }),
 
   readModel: (path) => invoke("read_model", { path }),
+
+  writeDetector: (path, weights) => invoke("write_detector", { path, weights }),
+
+  readDetector: (path) => invoke("read_detector", { path }),
 
   writeCheckpoint: (path, weights) => invoke("write_checkpoint", { path, weights }),
 

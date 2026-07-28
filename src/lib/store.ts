@@ -6,6 +6,7 @@ import type * as tfTypes from "@tensorflow/tfjs";
 import { storage, type ImportRef } from "./storage";
 import {
   boxesOf,
+  DETECT_MIN_IMAGES,
   hasLabel,
   labelsOf,
   makeId,
@@ -23,6 +24,7 @@ import {
   type ProjectManifest,
   type ProjectMode,
   type ProjectSummary,
+  type StoredDetector,
   type StoredHead,
   type TrainSettings,
 } from "./types";
@@ -36,6 +38,16 @@ import {
 import { initBackend } from "./ml/backend";
 import { embedToArray, embedWithSpatial, loadFeatureModel } from "./ml/features";
 import type { Attention, AttentionMap } from "./attention";
+import { iou, matchDetections, type Detection, type LabeledRect } from "./detect";
+import {
+  deserializeDetector,
+  detect,
+  serializeDetector,
+  trainDetector,
+  type DetectEpoch,
+  type Detector,
+  type DetectSample,
+} from "./ml/detector";
 import {
   deserializeHead,
   predictBatch,
@@ -88,6 +100,41 @@ export interface LabelStat {
   rate: number;
 }
 
+/** One scored picture in a detect project: what was drawn against what was read. */
+export interface DetectVerdict {
+  imageId: string;
+  truth: LabeledRect[];
+  predicted: Detection[];
+  /** Per detection, the index of the drawn box it hit, or -1 for a false alarm. */
+  hits: number[];
+  /** Indices of the drawn boxes nothing found. */
+  missed: number[];
+}
+
+export interface DetectLabelStat {
+  labelId: string;
+  /** Boxes drawn with this label in the scored set. */
+  truth: number;
+  /** How many of them a detection found. */
+  found: number;
+  /** Detections carrying this label. */
+  predicted: number;
+  recall: number;
+  precision: number;
+}
+
+export interface DetectTrainState {
+  epochs: DetectEpoch[];
+  stats: DetectLabelStat[];
+  verdicts: DetectVerdict[];
+  /** Mean overlap of the boxes that were found. */
+  meanIoU: number;
+  /** Whether the numbers describe unseen pictures or the ones it trained on. */
+  scored: "holdout" | "training";
+  trainedOn: number;
+  heldOut: number;
+}
+
 export interface TrainState {
   phase: TrainPhase;
   message: string;
@@ -98,6 +145,8 @@ export interface TrainState {
   valAccuracy: number | null;
   verdicts: ImageVerdict[];
   labelStats: LabelStat[];
+  /** Detect projects only, null in single and multi mode. */
+  detect: DetectTrainState | null;
 }
 
 export interface Prediction {
@@ -196,7 +245,16 @@ interface State {
 // Non reactive side tables. Keeping tensors and typed arrays out of the store
 // avoids pointless React work on every frame of a webcam session.
 const featureCache = new Map<string, Float32Array>();
+/**
+ * Grid features for detect projects, one 49 by 1024 map per picture. That is
+ * 196 KB each, so a hundred picture project holds about 20 MB here, and a run
+ * over three hundred pictures needs roughly 60 MB while it trains. The cache
+ * exists so MobileNet runs once per picture per run rather than once per epoch,
+ * and it is dropped whenever the project is.
+ */
+const spatialCache = new Map<string, Float32Array>();
 let head: tfTypes.Sequential | null = null;
+let detector: Detector | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** How long the app waits after the last correction before retraining itself. */
@@ -225,6 +283,7 @@ const idleTrainState: TrainState = {
   valAccuracy: null,
   verdicts: [],
   labelStats: [],
+  detect: null,
 };
 
 /** Turns raw head outputs into per image verdicts for the Train view. */
@@ -332,7 +391,14 @@ export const useStore = create<State>((set, get) => {
     cancelAutoRetrain();
     head?.dispose();
     head = null;
+    detector?.model.dispose();
+    detector = null;
     set({ hasModel: false, modelLabelIds: [], stale: false });
+  };
+
+  const forgetCaches = () => {
+    featureCache.clear();
+    spatialCache.clear();
   };
 
   const markStale = () => {
@@ -351,6 +417,27 @@ export const useStore = create<State>((set, get) => {
     return feature;
   };
 
+  /** Loads and caches the 49 by 1024 grid features for one stored image. */
+  const spatialFor = async (record: ImageRecord): Promise<Float32Array> => {
+    const cached = spatialCache.get(record.id);
+    if (cached) return cached;
+    const path = get().path;
+    if (!path) throw new Error("No project is open");
+    const img = await loadImageElement(storage.imageUrl(path, record.file));
+    const { pooled, spatial } = await embedWithSpatial(img, true);
+    if (!spatial) throw new Error("The feature extractor returned no grid");
+    try {
+      const cells = (await spatial.cells.data()) as Float32Array;
+      spatialCache.set(record.id, cells);
+      // The same pass already produced the pooled embedding, so the classifier
+      // cache gets it for free.
+      if (!featureCache.has(record.id)) featureCache.set(record.id, pooled);
+      return cells;
+    } finally {
+      spatial.cells.dispose();
+    }
+  };
+
   /** Labels that actually hold images, plus the samples that can be trained on. */
   const trainingSet = (manifest: ProjectManifest) => {
     const usable = manifest.labels.filter((label) =>
@@ -364,6 +451,233 @@ export const useStore = create<State>((set, get) => {
   };
 
   /**
+   * Everything a detect run trains on: the labels that carry boxes, the
+   * pictures it learns from and the ones it is scored on.
+   *
+   * Pictures with no boxes are kept: an empty scene is a real example of what
+   * nothing looks like. The holdout is every fifth picture rather than a random
+   * draw, so two runs on the same project are comparable, and it only happens
+   * when there are enough boxed pictures for the split to mean anything.
+   */
+  const detectSet = (manifest: ProjectManifest) => {
+    const labelIds = manifest.labels
+      .filter((label) => manifest.images.some((img) => boxesOf(img).some((b) => b.labelId === label.id)))
+      .map((label) => label.id);
+    const images = manifest.images;
+    const boxed = images.filter((img) => boxesOf(img).length > 0);
+    const split = manifest.settings.validationSplit;
+    const step = split > 0 ? Math.max(2, Math.round(1 / split)) : 0;
+    const canHold = step > 0 && boxed.length >= 20;
+    const holdout = canHold ? images.filter((_, i) => i % step === step - 1) : [];
+    const holdoutBoxed = holdout.filter((img) => boxesOf(img).length > 0).length;
+    // A holdout with nothing drawn in it can only report zeros, which would
+    // read as a broken model rather than as a split that did not work out.
+    const useHoldout = holdoutBoxed >= 3;
+    const held = new Set(useHoldout ? holdout.map((img) => img.id) : []);
+    return {
+      labelIds,
+      boxedCount: boxed.length,
+      training: images.filter((img) => !held.has(img.id)),
+      holdout: useHoldout ? holdout : [],
+    };
+  };
+
+  const readSamples = async (
+    records: ImageRecord[],
+    run: TrainRun,
+    onDone: (count: number) => void,
+    from: number,
+  ): Promise<DetectSample[]> => {
+    const samples: DetectSample[] = [];
+    for (let i = 0; i < records.length; i += 1) {
+      if (run.stop) throw new Error("Training cancelled");
+      const record = records[i];
+      samples.push({
+        imageId: record.id,
+        features: await spatialFor(record),
+        boxes: boxesOf(record).map((box) => ({
+          labelId: box.labelId,
+          x: box.x,
+          y: box.y,
+          w: box.w,
+          h: box.h,
+        })),
+      });
+      onDone(from + i + 1);
+    }
+    return samples;
+  };
+
+  /** Turns one scored set into the per label numbers the Train view shows. */
+  const scoreDetections = (
+    samples: DetectSample[],
+    labelIds: string[],
+    model: Detector,
+  ): { verdicts: DetectVerdict[]; stats: DetectLabelStat[]; meanIoU: number } => {
+    const verdicts: DetectVerdict[] = [];
+    const counts = new Map<string, { truth: number; found: number; predicted: number }>(
+      labelIds.map((id) => [id, { truth: 0, found: 0, predicted: 0 }]),
+    );
+    let overlap = 0;
+    let matched = 0;
+    for (const sample of samples) {
+      const predicted = detect(model, sample.features);
+      const { hits, missed } = matchDetections(sample.boxes, predicted, 0.5);
+      verdicts.push({ imageId: sample.imageId, truth: sample.boxes, predicted, hits, missed });
+      for (const box of sample.boxes) {
+        const count = counts.get(box.labelId);
+        if (count) count.truth += 1;
+      }
+      predicted.forEach((detection, i) => {
+        const count = counts.get(detection.labelId);
+        if (!count) return;
+        count.predicted += 1;
+        if (hits[i] < 0) return;
+        count.found += 1;
+        matched += 1;
+        overlap += iou(sample.boxes[hits[i]], detection);
+      });
+    }
+    const stats: DetectLabelStat[] = labelIds.map((labelId) => {
+      const count = counts.get(labelId) ?? { truth: 0, found: 0, predicted: 0 };
+      return {
+        labelId,
+        truth: count.truth,
+        found: count.found,
+        predicted: count.predicted,
+        recall: count.truth === 0 ? 0 : count.found / count.truth,
+        precision: count.predicted === 0 ? 0 : count.found / count.predicted,
+      };
+    });
+    return { verdicts, stats, meanIoU: matched === 0 ? 0 : overlap / matched };
+  };
+
+  /**
+   * One detection training run. Manual only: a detect project has no live
+   * corrections to fold in, so there is nothing for a background run to do.
+   */
+  const executeDetectRun = async (run: TrainRun, manifest: ProjectManifest, path: string) => {
+    const { labelIds, boxedCount, training, holdout } = detectSet(manifest);
+
+    if (labelIds.length === 0) {
+      get().toast("Draw a box on a picture before training", "bad");
+      return;
+    }
+    if (boxedCount < DETECT_MIN_IMAGES) {
+      get().toast(`Draw boxes on at least ${DETECT_MIN_IMAGES} pictures first`, "bad");
+      return;
+    }
+
+    const total = training.length + holdout.length;
+    set({
+      train: {
+        ...idleTrainState,
+        phase: "reading",
+        message: "Loading the feature extractor",
+        total,
+      },
+    });
+
+    try {
+      const backend = await initBackend();
+      set({ backend });
+      await loadFeatureModel();
+      set((s) => ({ train: { ...s.train, message: "Reading pictures" } }));
+
+      const mark = (done: number) => set((s) => ({ train: { ...s.train, done } }));
+      const samples = await readSamples(training, run, mark, 0);
+      const validation = await readSamples(holdout, run, mark, training.length);
+
+      set((s) => ({
+        train: { ...s.train, phase: "training", message: "Training the detector", done: 0 },
+      }));
+
+      const result = await trainDetector({
+        samples,
+        validation: validation.length > 0 ? validation : undefined,
+        labelIds,
+        settings: manifest.settings,
+        shouldStop: () => run.stop,
+        onProgress: (epoch) => {
+          set((s) => ({
+            train: {
+              ...s.train,
+              done: epoch.epoch,
+              total: epoch.totalEpochs,
+              detect: {
+                epochs: [...(s.train.detect?.epochs ?? []), epoch],
+                stats: [],
+                verdicts: [],
+                meanIoU: 0,
+                scored: validation.length > 0 ? "holdout" : "training",
+                trainedOn: samples.length,
+                heldOut: validation.length,
+              },
+            },
+          }));
+        },
+      });
+
+      set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each picture" } }));
+      const scoredSet = validation.length > 0 ? validation : samples;
+      const scored = scoreDetections(scoredSet, labelIds, result.detector);
+
+      detector?.model.dispose();
+      detector = result.detector;
+
+      await storage.writeDetector(path, JSON.stringify(serializeDetector(result.detector)));
+
+      const truth = scored.stats.reduce((sum, stat) => sum + stat.truth, 0);
+      const found = scored.stats.reduce((sum, stat) => sum + stat.found, 0);
+      const predicted = scored.stats.reduce((sum, stat) => sum + stat.predicted, 0);
+      const recall = truth === 0 ? 0 : found / truth;
+      const precision = predicted === 0 ? 0 : found / predicted;
+
+      touch({
+        model: {
+          trainedAt: new Date().toISOString(),
+          mode: "detect",
+          labelIds,
+          epochs: result.history.length,
+          accuracy: recall,
+          valAccuracy: null,
+          imageCount: samples.length,
+          settings: manifest.settings,
+          precision,
+          recall,
+          boxCount: manifest.images.reduce((sum, img) => sum + boxesOf(img).length, 0),
+        },
+      });
+
+      set((s) => ({
+        hasModel: true,
+        stale: false,
+        modelLabelIds: labelIds,
+        train: {
+          ...s.train,
+          phase: "done",
+          message: "Ready to use",
+          accuracy: recall,
+          valAccuracy: null,
+          detect: {
+            epochs: s.train.detect?.epochs ?? [],
+            stats: scored.stats,
+            verdicts: scored.verdicts,
+            meanIoU: scored.meanIoU,
+            scored: validation.length > 0 ? "holdout" : "training",
+            trainedOn: samples.length,
+            heldOut: validation.length,
+          },
+        },
+      }));
+      await get().saveNow();
+    } catch (err) {
+      set((s) => ({ train: { ...s.train, phase: "error", message: errorText(err) } }));
+      get().toast(errorText(err), "bad");
+    }
+  };
+
+  /**
    * One training pass. Manual runs drive the whole Train view; automatic runs
    * stay quiet, keep a checkpoint of the head they replace and never block the
    * live camera beyond the frame yields the fit loop already does.
@@ -373,9 +687,13 @@ export const useStore = create<State>((set, get) => {
     const path = get().path;
     if (!manifest || !path) return;
     const auto = run.mode === "auto";
-    // Detect projects train a detection head, which is not built yet. Nothing
-    // here can read boxes, so the classifier path never runs on them.
-    if (manifest.mode === "detect") return;
+    // A detect project trains a detection head on drawn boxes, which is a
+    // different loss, a different loop and a different set of results. The
+    // classifier path below never sees one.
+    if (manifest.mode === "detect") {
+      if (!auto) await executeDetectRun(run, manifest, path);
+      return;
+    }
     const { labelIds, samples } = trainingSet(manifest);
 
     if (labelIds.length < 2) {
@@ -651,7 +969,7 @@ export const useStore = create<State>((set, get) => {
         const dir = get().projectsDir ?? (await storage.defaultProjectsDir());
         const manifest = newManifest(name.trim() || "Untitled", APP_VERSION, mode);
         const path = await storage.createProject(dir, manifest.name, JSON.stringify(manifest, null, 2));
-        featureCache.clear();
+        forgetCaches();
         dropModel();
         set({
           path,
@@ -673,7 +991,7 @@ export const useStore = create<State>((set, get) => {
       try {
         const text = await storage.readManifest(path);
         const manifest = migrateManifest(JSON.parse(text) as ProjectManifest);
-        featureCache.clear();
+        forgetCaches();
         dropModel();
         set({
           path,
@@ -686,6 +1004,24 @@ export const useStore = create<State>((set, get) => {
         });
         await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
+
+        // Restore a previously trained detection head, same idea as the
+        // classifier below: reopening a project gets its model back without a
+        // second training run.
+        if (manifest.mode === "detect") {
+          const storedDetector = await storage.readDetector(path);
+          if (storedDetector) {
+            await loadFeatureModel();
+            const parsed = JSON.parse(storedDetector) as StoredDetector;
+            const restored = deserializeDetector(parsed);
+            if (restored) {
+              detector = restored;
+              set({ hasModel: true, stale: false, modelLabelIds: parsed.labelIds });
+            }
+          }
+          set({ hasCheckpoint: false });
+          return;
+        }
 
         // Restore a previously trained head so the Use view works immediately.
         const stored = await storage.readModel(path);
@@ -715,7 +1051,7 @@ export const useStore = create<State>((set, get) => {
 
     closeProject() {
       if (saveTimer) clearTimeout(saveTimer);
-      featureCache.clear();
+      forgetCaches();
       dropModel();
       set({
         path: null,
@@ -817,7 +1153,10 @@ export const useStore = create<State>((set, get) => {
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
-      doomed.forEach((img) => featureCache.delete(img.id));
+      doomed.forEach((img) => {
+        featureCache.delete(img.id);
+        spatialCache.delete(img.id);
+      });
       const gone = new Set(doomed.map((img) => img.id));
       const labels = manifest.labels.filter((l) => l.id !== id);
       touch({
@@ -1077,7 +1416,10 @@ export const useStore = create<State>((set, get) => {
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
-      doomed.forEach((img) => featureCache.delete(img.id));
+      doomed.forEach((img) => {
+        featureCache.delete(img.id);
+        spatialCache.delete(img.id);
+      });
       touch({
         images: manifest.images.filter((img) => !imageIds.includes(img.id)),
       });

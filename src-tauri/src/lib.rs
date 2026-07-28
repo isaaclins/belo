@@ -6,6 +6,7 @@
 //     images/*.jpg      normalized 224x224 training images
 //     model/head.json       trained classifier head weights
 //     model/head.prev.json  checkpoint of the head before the last auto retrain
+//     model/detect.json     trained detection head weights, detect projects only
 //
 // The manifest schema is owned by the frontend, so this layer moves strings
 // and bytes only. It never parses project.json beyond a couple of display
@@ -24,6 +25,7 @@ const MANIFEST: &str = "project.json";
 const IMAGES_DIR: &str = "images";
 const MODEL_DIR: &str = "model";
 const CHECKPOINT_FILE: &str = "head.prev.json";
+const DETECTOR_FILE: &str = "detect.json";
 const RECENTS_FILE: &str = "recents.json";
 const MAX_RECENTS: usize = 12;
 
@@ -210,6 +212,29 @@ fn read_model(path: String) -> Res<Option<String>> {
         .map_err(|e| fail("could not read the model", e))
 }
 
+// A detect project trains a detection head instead of a classifier, so it gets
+// its own file next to head.json rather than sharing one.
+#[tauri::command]
+fn write_detector(path: String, weights: String) -> Res<()> {
+    let root = bundle_root(&path)?;
+    let dir = root.join(MODEL_DIR);
+    fs::create_dir_all(&dir).map_err(|e| fail("could not open the model folder", e))?;
+    fs::write(dir.join(DETECTOR_FILE), weights)
+        .map_err(|e| fail("could not write the detector", e))
+}
+
+#[tauri::command]
+fn read_detector(path: String) -> Res<Option<String>> {
+    let root = bundle_root(&path)?;
+    let file = root.join(MODEL_DIR).join(DETECTOR_FILE);
+    if !file.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(file)
+        .map(Some)
+        .map_err(|e| fail("could not read the detector", e))
+}
+
 // The checkpoint is a plain copy of a previous head.json, kept so an automatic
 // background retrain can always be undone from the Train view.
 #[tauri::command]
@@ -325,7 +350,8 @@ fn summarize(path: &Path) -> ProjectSummary {
                 .to_string();
         }
     }
-    summary.trained = path.join(MODEL_DIR).join("head.json").exists();
+    summary.trained = path.join(MODEL_DIR).join("head.json").exists()
+        || path.join(MODEL_DIR).join(DETECTOR_FILE).exists();
     summary
 }
 
@@ -439,6 +465,8 @@ pub fn run() {
             delete_images,
             write_model,
             read_model,
+            write_detector,
+            read_detector,
             write_checkpoint,
             read_checkpoint,
             has_checkpoint,
