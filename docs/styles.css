@@ -522,6 +522,11 @@ img, svg { display: block; max-width: 100%; }
 
 .tile--wide { background: var(--panel); }
 
+.tile--detect {
+  grid-column: 1 / -1;
+  background: var(--accent-3);
+}
+
 .tile--hold {
   background: var(--accent-2-deep);
   color: #ffffff;

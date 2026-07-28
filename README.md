@@ -7,21 +7,44 @@ Teach your computer to recognize things using your own pictures. Belo keeps ever
 picture and project on your device. There is no account, no upload, and no internet
 connection needed after installation.
 
-## Three simple steps
+## Pick what you want Belo to learn
+
+Every new project offers three clear choices:
+
+- **Classify one answer** gives the whole picture one best label.
+- **Classify many answers** gives every label its own yes or no, so one picture can have
+  several labels.
+- **Detect objects** finds several things in one picture and draws a real box around each
+  one.
+
+## Classification in three simple steps
 
 1. **Label.** Name the things you want Belo to recognize, then add pictures from your
    files or camera.
-2. **Train.** Press one button. Belo learns from your examples and shows how well it is
-   doing, including which pictures it still finds confusing.
+2. **Train.** Press one button. Belo learns from your examples and shows which pictures
+   still confuse it.
 3. **Use.** Point your camera at something, or choose one picture, and see Belo's answer.
    Correct it when it is wrong so it can learn from that example too.
 
+## Detection in three simple steps
+
+1. **Draw boxes.** Add pictures, then drag a box around every object you want Belo to
+   find.
+2. **Train.** Belo studies the box labels, positions and sizes.
+3. **Use live.** Point the camera at your scene. Belo draws real boxes around the custom
+   objects it finds, or does the same on one chosen picture.
+
+Detection usually improves with about **50 to 200 boxes per label**, with varied
+backgrounds, angles and sizes. Desktop is recommended for training because detection uses
+more memory and takes longer. **Show attention is only for classification projects**;
+detect projects show their detector's actual boxes instead.
+
 ## Useful things you can do
 
-- **Teach from the live camera.** Hold a teaching button to add several examples, and
-  choose how quickly Belo takes them.
-- **See where Belo is looking.** Turn on **Show attention** for a colored hint showing
-  which parts of the picture influenced each answer.
+- **Teach classification from the live camera.** Hold a teaching button to add several
+  examples, and choose how quickly Belo takes them.
+- **See classification clues.** Turn on **Show attention** for a colored hint showing
+  which parts of the picture influenced each classification answer.
 - **Give one picture several labels.** For example, the same picture can be both
   "outdoors" and "dog".
 - **Keep projects you can back up.** On desktop, each `.belo` project is a normal folder
@@ -37,14 +60,14 @@ Until then, a technical friend can [build Belo from source](#development).
 
 ## Honest limitations
 
-Belo does image classification: it decides which labels fit a whole picture. **Show
-attention** is only a rough hint about which parts influenced an answer, not object
-detection. Results also depend on your examples and camera quality, so varied, clear
-pictures usually work better.
+Results depend on your examples and camera quality, so varied, clear pictures usually work
+better. Detection reads a 7x7 grid over the picture, so an object much smaller than a
+seventh of the frame is hard for it to place. Training detection on a phone can also use a
+lot of memory, so desktop is the safer choice for a large project.
 
-A **detect** project, where you draw a box around each object, can be labeled, trained and
-used on the live camera or one dropped image. Detection reads a 7x7 grid over the picture,
-so an object much smaller than a seventh of the frame is hard for it to place.
+**Show attention** remains a rough classification hint, not a detector. It is available
+only in Classify one answer and Classify many answers projects. Detect objects projects
+use the separately trained detector and show its real boxes.
 
 ## FAQ
 
@@ -64,7 +87,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.4.3**. Desktop and iOS are supported. Android is code-complete
+Current app version: **0.5.0**. Desktop and iOS are supported. Android is code-complete
 but has not yet been built on an Android toolchain.
 
 ## Detailed workflow
@@ -194,6 +217,13 @@ it caches the grid features so MobileNet runs once per picture per run. Those ca
 are the memory cost of a detect run: 196 KB per picture, so about 20 MB for a hundred
 pictures and 60 MB for three hundred.
 
+The runtime inference contract is `detectSpatialMap(detector, cells, options)` in
+`src/lib/ml/detector.ts`. It accepts one 7x7 spatial feature map and returns normalized
+`x`, `y`, `w`, `h`, label and score values after thresholding and per-label suppression.
+The app-facing `store.detectObjects(source, scoreThreshold)` extracts that map, calls the
+same contract used by the live and still-image views, and always disposes the tensor it
+owns.
+
 TensorFlow.js picks the **WebGL** backend and falls back to **WASM** if WebGL is
 unavailable. The WASM binaries are copied into `public/tfjs-wasm` by `npm run assets`,
 which runs automatically before `dev` and `build`.
@@ -226,7 +256,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.4.3",
+  "appVersion": "0.5.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -311,6 +341,15 @@ npm run build         # typecheck plus production frontend build
 npm run typecheck     # tsc --noEmit only
 npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
+```
+
+Detection release verification:
+
+```bash
+npm run check:boxes       # manifest v3 and one-finger box geometry
+npm run check:detect      # anchors, loss inputs, decoding and scoring
+npm run check:camera      # live camera switching seam
+npm run check:learning    # learning proof plus the exact Use inference path
 ```
 
 Useful extras:
