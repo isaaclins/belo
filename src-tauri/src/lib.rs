@@ -219,8 +219,7 @@ fn write_detector(path: String, weights: String) -> Res<()> {
     let root = bundle_root(&path)?;
     let dir = root.join(MODEL_DIR);
     fs::create_dir_all(&dir).map_err(|e| fail("could not open the model folder", e))?;
-    fs::write(dir.join(DETECTOR_FILE), weights)
-        .map_err(|e| fail("could not write the detector", e))
+    fs::write(dir.join(DETECTOR_FILE), weights).map_err(|e| fail("could not write the detector", e))
 }
 
 #[tauri::command]
@@ -348,10 +347,15 @@ fn summarize(path: &Path) -> ProjectSummary {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
+            let has_model_meta = value.get("model").is_some_and(|model| !model.is_null());
+            let model_file = if value.get("mode").and_then(|v| v.as_str()) == Some("detect") {
+                DETECTOR_FILE
+            } else {
+                "head.json"
+            };
+            summary.trained = has_model_meta && path.join(MODEL_DIR).join(model_file).exists();
         }
     }
-    summary.trained = path.join(MODEL_DIR).join("head.json").exists()
-        || path.join(MODEL_DIR).join(DETECTOR_FILE).exists();
     summary
 }
 
@@ -449,6 +453,39 @@ fn delete_project(app: tauri::AppHandle, path: String) -> Res<()> {
     }
     fs::remove_dir_all(&root).map_err(|e| fail("could not delete the project", e))?;
     forget_project(app, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_ignores_an_orphan_detector_file() {
+        let root = std::env::temp_dir().join(format!(
+            "zz-belo-summary-{}-{}.belo",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let model_dir = root.join(MODEL_DIR);
+        fs::create_dir_all(&model_dir).unwrap();
+        fs::write(model_dir.join(DETECTOR_FILE), "{}").unwrap();
+        fs::write(
+            root.join(MANIFEST),
+            r#"{"name":"Check","mode":"detect","labels":[],"images":[],"model":null}"#,
+        )
+        .unwrap();
+
+        assert!(!summarize(&root).trained);
+
+        fs::write(
+            root.join(MANIFEST),
+            r#"{"name":"Check","mode":"detect","labels":[],"images":[],"model":{"labelIds":[]}}"#,
+        )
+        .unwrap();
+        assert!(summarize(&root).trained);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
