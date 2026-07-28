@@ -54,6 +54,7 @@ const MIN_PRECISION = 0.75;
 const MIN_LABEL_RECALL = 0.65;
 const MIN_LABEL_PRECISION = 0.7;
 const MIN_MEAN_IOU = 0.6;
+const MIN_USE_FRAME_RATE = 0.6;
 
 /** Deterministic noise, so a failure here is a real one and not a bad draw. */
 function mulberry32(seed) {
@@ -70,7 +71,9 @@ const rng = mulberry32(20260728);
 // Weight initialization and batch shuffling both draw from here too.
 Math.random = rng;
 
-const { detect, trainDetector } = await import(new URL("../src/lib/ml/detector.ts", import.meta.url));
+const { detect, detectSpatialMap, trainDetector } = await import(
+  new URL("../src/lib/ml/detector.ts", import.meta.url),
+);
 const { matchDetections, iou } = await import(new URL("../src/lib/detect.ts", import.meta.url));
 const { DETECT_SETTINGS } = await import(new URL("../src/lib/types.ts", import.meta.url));
 
@@ -308,6 +311,63 @@ function evaluate(set, options = {}) {
 
 const trainScore = evaluate(samples);
 const score = evaluate(holdout);
+
+// This is the Use view seam, not a second decoding fixture: each cached map is
+// rebuilt as the [49, 1024] tensor embedWithSpatial hands the store, then sent
+// through detectSpatialMap before the same IoU matcher checks the rendered box
+// list. The tensor count before and after also proves the caller-owned map can
+// be disposed every tick without accumulating one per frame.
+function evaluateUsePath(set) {
+  const tensorsBefore = tf.memory().numTensors;
+  const started = performance.now();
+  let framesHit = 0;
+  let boxesHit = 0;
+  const overlaps = [];
+  for (const picture of set) {
+    const cells = tf.tensor2d(picture.features, [49, 1024]);
+    let detections;
+    try {
+      detections = detectSpatialMap(detector, cells);
+    } finally {
+      cells.dispose();
+    }
+    const matched = matchDetections(picture.boxes, detections, 0.5);
+    let frameHit = false;
+    detections.forEach((detection, index) => {
+      const truthIndex = matched.hits[index];
+      if (truthIndex < 0) return;
+      frameHit = true;
+      boxesHit += 1;
+      overlaps.push(iou(picture.boxes[truthIndex], detection));
+    });
+    if (frameHit) framesHit += 1;
+  }
+  return {
+    framesHit,
+    boxesHit,
+    frameRate: framesHit / set.length,
+    meanIoU: overlaps.reduce((sum, overlap) => sum + overlap, 0) / Math.max(1, overlaps.length),
+    msPerFrame: (performance.now() - started) / set.length,
+    tensorDelta: tf.memory().numTensors - tensorsBefore,
+  };
+}
+
+const usePath = evaluateUsePath(holdout);
+console.log(
+  `\nUse data path at score 0.30: ${usePath.framesHit}/${holdout.length} frames have a box at IoU >= 0.5, ` +
+    `${usePath.boxesHit} boxes hit, mean IoU ${usePath.meanIoU.toFixed(3)}, ` +
+    `${usePath.msPerFrame.toFixed(1)}ms head + decode, tensor delta ${usePath.tensorDelta}`,
+);
+check(
+  `Use boxes land on shapes in at least ${MIN_USE_FRAME_RATE * 100}% of held out frames`,
+  usePath.frameRate >= MIN_USE_FRAME_RATE,
+  `${(usePath.frameRate * 100).toFixed(0)}% (${usePath.framesHit}/${holdout.length})`,
+);
+check(
+  "Use spatial maps are disposed after every frame",
+  usePath.tensorDelta === 0,
+  `tensor delta ${usePath.tensorDelta}`,
+);
 
 console.log("\nheld out set by score threshold");
 for (const threshold of [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]) {

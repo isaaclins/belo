@@ -22,8 +22,8 @@
 //   of independent sigmoids. A drawn box carries exactly one label, so the
 //   classes really are exclusive, and a background class is what makes hard
 //   negative mining a straight ranking of one number rather than a rule about
-//   several. Phase 3 reads scores as softmax probabilities with background at
-//   index 0.
+//   several. Inference reads scores as softmax probabilities with background
+//   at index 0.
 // - The localization loss is smooth L1 over positives only, the classification
 //   loss is cross entropy over positives plus three mined negatives each.
 //

@@ -99,7 +99,11 @@ but has not yet been built on an Android toolchain.
    evidence for the current call sits: a tinted heat map plus one box per label. It reads
    the classifier's own 7x7 feature grid, so it is a coarse hint at roughly a 32 pixel
    resolution and never an object detector. The toggle starts off and is remembered until
-   the app closes, never in the project.
+   the app closes, never in the project. Detect projects use their real detector instead:
+   every object above the chosen score threshold gets a coloured box, name and score over
+   the live video or a dropped image. The threshold choices are 0.2, 0.3, 0.5 and 0.7 and
+   the last choice is remembered. A live frame can be saved back to the project without
+   boxes, ready to annotate later in Label.
 
 Model export is out of scope for this version.
 
@@ -124,8 +128,9 @@ be switched afterwards.
    detection head on those boxes and then shows every scored picture twice over: your
    boxes in their label colour, the boxes the detector read dashed on top, so a miss and a
    false alarm are visible instead of averaged away. It wants boxes on at least ten
-   pictures before it will train. Live detection in the Use view arrives in a later
-   update, so that stage still shows a placeholder.
+   pictures before it will train. The Use view runs that head on the camera at the same
+   paced cadence as classification, dropping a tick instead of queueing work when a frame
+   is still running, and also accepts one image for a single pass.
 
 Images with no labels are ignored by training in single and multi mode. In detect mode a
 picture with no boxes is not ignored: it is a background example, and training uses it to
@@ -181,8 +186,9 @@ grid rather than the pooled embedding. It follows the SSD recipe:
   on the offsets; the classification loss is cross entropy over the positives plus the
   three hardest background anchors per positive.
 - **Reading it back.** Scores are softmax probabilities with background at index 0.
-  Anything at 0.3 or above survives, then per label suppression at 0.3 overlap removes the
-  duplicates that neighbouring anchors produce.
+  Anything at 0.3 or above survives by default, then per label suppression at 0.3 overlap
+  removes the duplicates that neighbouring anchors produce. The Use view can move the
+  score cutoff between 0.2, 0.3, 0.5 and 0.7 without retraining.
 
 Training runs its own loop rather than `model.fit`, because of the anchor bookkeeping, and
 it caches the grid features so MobileNet runs once per picture per run. Those cached maps
@@ -328,8 +334,11 @@ Useful extras:
   settings a new detect project is created with, and then measures on 24 pictures it never
   saw. The run is seeded. It currently finds 75 percent of the held out boxes with 88
   percent of its detections right and a mean overlap of 0.68, against 100 percent on the
-  pictures it trained on. It takes about half a minute, most of it feature extraction,
-  which is cached in the temp folder for reruns. Needs Node 22.15 or newer.
+  pictures it trained on. It also rebuilds each held out spatial map as the tensor handed
+  to the Use view, runs the exact Use inference seam and checks both placement and tensor
+  cleanup; 21 of 24 frames contain a correctly placed box at half overlap. It takes about
+  half a minute, and feature extraction is cached in the temp folder for reruns. Needs
+  Node 22.15 or newer.
 
 ### Layout
 
@@ -339,7 +348,8 @@ src/
   assets/logo.svg         the canonical Belo mark
   components/ui.tsx       modal, meter, toasts, empty state
   components/BeloMark.tsx          the mark as a component, top bar and home hero
-  components/AttentionOverlay.tsx  heat map and boxes drawn over the live video
+  components/AttentionOverlay.tsx  classifier heat map and coarse boxes over live video
+  components/DetectionOverlay.tsx  detector boxes aligned to live and single-image pixels
   components/CameraPicker.tsx      camera select shown wherever live video runs
   components/ThumbSizePicker.tsx   the four step image grid cell size control
   lib/
@@ -361,7 +371,7 @@ src/
   views/                  HomeView, LabelView, CaptureModal, TrainView, UseView
                           BoxAnnotator (detect mode box drawing)
                           DetectTrainView (detect mode training and results)
-                          DetectSoonView (detect mode Use placeholder)
+                          DetectUseView (live and single-image detection)
   styles/                 tokens, base, ui primitives, app layout
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
 public/models/            bundled MobileNet weights
