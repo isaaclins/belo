@@ -111,4 +111,14 @@
   Array.prototype.forEach.call(targets, function (element) {
     observer.observe(element);
   });
+
+  /* Failsafe: a full page screenshot renders everything at once and never
+     scrolls, so anything still hidden after a moment is revealed outright.
+     Nothing on this page may depend on the observer to become readable. */
+  window.setTimeout(function () {
+    observer.disconnect();
+    Array.prototype.forEach.call(targets, function (element) {
+      element.classList.add("is-in");
+    });
+  }, 2000);
 })();

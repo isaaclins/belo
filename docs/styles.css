@@ -75,7 +75,6 @@ body {
   font-family: var(--font-body);
   font-size: 17px;
   line-height: 1.55;
-  overflow-x: hidden;
 }
 
 h1, h2, h3 {
@@ -839,6 +838,12 @@ img, svg { display: block; max-width: 100%; }
 
 /* ---------------- reveal ---------------- */
 
+/* Screenshots, print and any environment where the observer never fires must
+   still show content, so the hidden state is only a transient. */
+@media print {
+  .reveal { opacity: 1 !important; transform: none !important; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .reveal {
     opacity: 0;
@@ -893,6 +898,16 @@ img, svg { display: block; max-width: 100%; }
   .btn { width: 100%; }
   .cta-row { gap: 12px; }
   .band__list { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 32px var(--gutter); }
+
+  /* Phones get the bare tree and a tighter command block, so neither needs
+     to be dragged sideways to be read. Both stay scroll containers anyway. */
+  .tree i { display: none; }
+  .tree pre { font-size: 0.78rem; }
+  .code { padding: 16px; }
+  .code code { font-size: 0.72rem; }
+  /* The clone line is the longest one, so the copy button drops to the short
+     last line instead of sitting on top of the repository URL. */
+  .copy { top: auto; bottom: 12px; right: 12px; }
   .tile, .card, .model__item { padding: 20px; }
   .get__head { max-width: none; }
   .footer__links { flex-wrap: wrap; }
