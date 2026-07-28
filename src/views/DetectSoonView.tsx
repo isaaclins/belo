@@ -1,16 +1,16 @@
-import { BoundingBox, PencilSimple } from "@phosphor-icons/react";
+import { BoundingBox, Lightning } from "@phosphor-icons/react";
 import { useStore } from "../lib/store";
 import { boxesOf } from "../lib/types";
 
 /**
- * Stand in for the Train and Use stages of a detect project. The detection head
- * lands in a later update, so this panel is the mode guard: App routes detect
- * projects here instead of the classifier views, and the real views slot in by
- * replacing these two branches.
+ * Stand in for the Use stage of a detect project. Training works and the model
+ * is saved with the project; running it on a live camera lands in the next
+ * update, and this panel is the mode guard until it does.
  */
-export function DetectSoonView({ stage }: { stage: "train" | "use" }) {
+export function DetectSoonView() {
   const manifest = useStore((s) => s.manifest);
   const setView = useStore((s) => s.setView);
+  const hasModel = useStore((s) => s.hasModel);
 
   const images = manifest?.images ?? [];
   const boxes = images.reduce((sum, image) => sum + boxesOf(image).length, 0);
@@ -19,13 +19,15 @@ export function DetectSoonView({ stage }: { stage: "train" | "use" }) {
   return (
     <div className="soon">
       <section className="soon__panel">
-        <span className="eyebrow">{stage === "train" ? "02 Train" : "03 Use"}</span>
+        <span className="eyebrow">03 Use</span>
         <span className="soon__mark">
           <BoundingBox size={34} weight="bold" />
         </span>
-        <h2 className="soon__title">Detection training arrives with the next update.</h2>
+        <h2 className="soon__title">Live detection arrives with the next update.</h2>
         <p className="soon__text">
-          Draw boxes on your images meanwhile so training has something to learn from.
+          {hasModel
+            ? "Your detector is trained and saved with the project. The Train view shows what it finds on your own pictures until the camera can run it."
+            : "Draw boxes on your pictures, then train the detector. The Train view shows what it finds on your own pictures."}
         </p>
 
         <dl className="soon__stats">
@@ -43,8 +45,8 @@ export function DetectSoonView({ stage }: { stage: "train" | "use" }) {
           </div>
         </dl>
 
-        <button className="btn btn--primary" onClick={() => setView("label")}>
-          <PencilSimple size={16} weight="bold" /> Back to drawing
+        <button className="btn btn--primary" onClick={() => setView("train")}>
+          <Lightning size={16} weight="bold" /> Back to training
         </button>
       </section>
     </div>

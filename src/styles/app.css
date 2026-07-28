@@ -1289,6 +1289,187 @@
   max-width: 62ch;
 }
 
+/* ---------- Detect: training results ---------- */
+
+.dlegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dlegend__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dlegend__chip {
+  width: 18px;
+  height: 12px;
+  border: var(--border-w-thin) solid var(--ink);
+}
+
+.dlegend__chip--gt {
+  background: var(--accent);
+}
+
+.dlegend__chip--pred {
+  border-style: dashed;
+  background: var(--panel);
+}
+
+.dgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: var(--s3);
+}
+
+.dshot {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--panel);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.dshot--bad {
+  border-color: var(--danger);
+  box-shadow: 3px 3px 0 var(--danger);
+}
+
+/* Every stored picture is a square, so a normalized box lands on the pixels it
+   was drawn on without any letterboxing arithmetic. */
+.dshot__frame {
+  position: relative;
+  aspect-ratio: 1;
+  background: var(--ink);
+  border-bottom: var(--border-w-thin) solid var(--ink);
+}
+
+.dshot__frame img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.dbox {
+  position: absolute;
+  pointer-events: none;
+}
+
+.dbox--gt {
+  border: 3px solid var(--accent);
+}
+
+.dbox--missed {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.dbox--pred {
+  border: 2px dashed var(--panel);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
+.dbox--alarm {
+  border-color: var(--danger);
+}
+
+.dbox__tag {
+  position: absolute;
+  left: -2px;
+  bottom: -2px;
+  transform: translateY(100%);
+  max-width: 140px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.dshot__body {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: var(--s2) var(--s3);
+}
+
+.dshot__count {
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.dshot__flag {
+  padding: 1px 6px;
+  background: var(--danger);
+  color: #fff;
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dcurve {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.dcurve svg {
+  width: 100%;
+  height: 110px;
+  background: var(--paper-deep);
+  border: var(--border-w-thin) solid var(--ink);
+}
+
+.dcurve__line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcurve__line--held {
+  stroke: var(--accent-2);
+  stroke-dasharray: 5 4;
+}
+
+.dcurve__keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dcurve__key {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dcurve__chip {
+  width: 14px;
+  height: 4px;
+  background: var(--ink);
+}
+
+.dcurve__chip--held {
+  background: var(--accent-2);
+}
+
 /* ---------- Detect: annotator ---------- */
 .anno {
   position: fixed;
