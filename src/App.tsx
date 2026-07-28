@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CheckCircle, CircleNotch, FloppyDisk, SignOut } from "@phosphor-icons/react";
 import { useStore, type View } from "./lib/store";
+import { BeloMark } from "./components/BeloMark";
 import { BusyBar, Toasts } from "./components/ui";
 import { HomeView } from "./views/HomeView";
 import { LabelView } from "./views/LabelView";
@@ -151,7 +152,9 @@ export default function App() {
   if (!booted) {
     return (
       <div className="boot">
-        <span className="boot__mark" />
+        <span className="boot__mark">
+          <BeloMark size={54} />
+        </span>
         <span className="eyebrow">Starting Belo</span>
       </div>
     );
@@ -161,7 +164,7 @@ export default function App() {
     <div className={manifest ? "shell shell--project" : "shell"}>
       <header className="topbar">
         <div className="topbar__brand">
-          <span className="topbar__mark" aria-hidden="true" />
+          <BeloMark size={26} onDark className="topbar__mark" />
           <span className="topbar__word">Belo</span>
         </div>
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowRight, FolderOpen, Plus, Stack, Trash, Circuitry } from "@phosphor-icons/react";
 import { useStore } from "../lib/store";
+import { BeloMark } from "../components/BeloMark";
 import { Modal } from "../components/ui";
 import { storage } from "../lib/storage";
 import type { ProjectMode, ProjectSummary } from "../lib/types";
@@ -91,10 +92,7 @@ export function HomeView() {
   return (
     <div className="home scroll">
       <section className="home__intro">
-        <div className="home__mark" aria-hidden="true">
-          <span className="home__lens" />
-          <span className="home__chip" />
-        </div>
+        <BeloMark size={92} className="home__mark" />
         <h1 className="home__title">
           Teach your
           <br />

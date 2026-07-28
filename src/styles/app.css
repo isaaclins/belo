@@ -21,10 +21,8 @@
 }
 
 .boot__mark {
-  width: 54px;
-  height: 54px;
-  background: var(--accent);
-  border: var(--border-w) solid var(--ink);
+  display: block;
+  line-height: 0;
   box-shadow: var(--shadow);
   animation: nudge 1.1s steps(2, end) infinite alternate;
 }
@@ -68,19 +66,10 @@
 }
 
 .topbar__mark {
-  position: relative;
+  display: block;
+  flex: none;
   width: 26px;
   height: 26px;
-  background: var(--accent);
-  border: 2px solid var(--paper);
-}
-
-.topbar__mark::after {
-  content: "";
-  position: absolute;
-  inset: 6px;
-  border: 3px solid var(--ink);
-  border-radius: 50%;
 }
 
 .topbar__word {
@@ -283,32 +272,10 @@
 }
 
 .home__mark {
-  position: relative;
+  display: block;
   width: 92px;
   height: 92px;
-  background: var(--accent);
-  border: var(--border-w) solid var(--ink);
   box-shadow: var(--shadow);
-}
-
-.home__lens {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  width: 46px;
-  height: 46px;
-  border: 10px solid var(--ink);
-  border-radius: 50%;
-}
-
-.home__chip {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  width: 28px;
-  height: 28px;
-  background: var(--accent-3);
-  border: var(--border-w-thin) solid var(--ink);
 }
 
 .home__title {
@@ -1364,21 +1331,6 @@
   .home__mark {
     width: 72px;
     height: 72px;
-  }
-
-  .home__lens {
-    top: 11px;
-    left: 11px;
-    width: 38px;
-    height: 38px;
-    border-width: 8px;
-  }
-
-  .home__chip {
-    right: 8px;
-    bottom: 8px;
-    width: 24px;
-    height: 24px;
   }
 
   .home__title {
