@@ -13,6 +13,8 @@ import {
 } from "@phosphor-icons/react";
 import { useStore } from "../lib/store";
 import { EmptyState, Modal, swatch } from "../components/ui";
+import { ThumbSizePicker } from "../components/ThumbSizePicker";
+import { useThumbSize } from "../lib/thumbSize";
 import { filesFromDataTransfer } from "../lib/images";
 import { storage } from "../lib/storage";
 import { CaptureModal } from "./CaptureModal";
@@ -42,6 +44,8 @@ export function LabelView() {
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [draft, setDraft] = useState("");
+
+  const thumb = useThumbSize();
 
   const labels = manifest?.labels ?? [];
   const images = manifest?.images ?? [];
@@ -203,6 +207,7 @@ export function LabelView() {
           </div>
 
           <div className="row row--tight">
+            <ThumbSizePicker />
             <button className="btn btn--sm" onClick={() => void pickImages()}>
               <FilePlus size={16} weight="bold" /> {storage.mobile ? "Photos" : "Files"}
             </button>
@@ -332,7 +337,10 @@ export function LabelView() {
               }
             />
           ) : (
-            <div className="grid scroll">
+            <div
+              className="grid scroll"
+              style={{ "--cell": `${thumb}px` } as React.CSSProperties}
+            >
               {shown.map((image) => {
                 const on = selection.includes(image.id);
                 return (
@@ -346,6 +354,7 @@ export function LabelView() {
                       src={storage.imageUrl(path, image.file)}
                       alt=""
                       loading="lazy"
+                      decoding="async"
                       draggable={false}
                     />
                     {on ? (

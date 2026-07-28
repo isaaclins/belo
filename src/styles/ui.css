@@ -408,6 +408,41 @@
   font-size: 11px;
 }
 
+/* ---------- Thumbnail size ---------- */
+/* One joined segment, so the two steps read as a pair rather than as two
+   unrelated icon buttons sitting next to the import actions. */
+.thumbsize {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.thumbsize__btn.iconbtn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 0;
+}
+
+.thumbsize__btn.iconbtn:disabled {
+  border-style: solid;
+}
+
+.thumbsize__step {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  background: var(--panel);
+  border-left: var(--border-w-thin) solid var(--ink);
+  border-right: var(--border-w-thin) solid var(--ink);
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 /* ---------- Badge / chip ---------- */
 .badge {
   display: inline-flex;
