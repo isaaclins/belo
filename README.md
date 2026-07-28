@@ -37,10 +37,13 @@ Until then, a technical friend can [build Belo from source](#development).
 
 ## Honest limitations
 
-Belo does image classification: it decides which labels fit a whole picture. It does not
-find or outline individual objects. **Show attention** is only a rough hint about which
-parts influenced an answer, not object detection. Results also depend on your examples
-and camera quality, so varied, clear pictures usually work better.
+Belo does image classification: it decides which labels fit a whole picture. **Show
+attention** is only a rough hint about which parts influenced an answer, not object
+detection. Results also depend on your examples and camera quality, so varied, clear
+pictures usually work better.
+
+A **detect** project, where you draw a box around each object, can be labeled today but
+not trained or used yet: that part arrives in a later update.
 
 ## FAQ
 
@@ -68,7 +71,11 @@ but has not yet been built on an Android toolchain.
 1. **Label.** Create labels, then fill them by dragging in files or whole folders,
    importing from disk, or holding the capture button for a webcam burst. Images can be
    selected and moved between labels or deleted. In a multi label project the same
-   selection toggles several labels on and off instead of moving between them. The grid
+   selection toggles several labels on and off instead of moving between them. In a detect
+   project a click opens the picture large instead, and you drag rectangles onto it: the
+   label rail picks the color you draw with, boxes can be moved, resized by their eight
+   grips and deleted, and the thumbnails show the boxes with a count so progress is
+   readable from the grid. The grid
    uses uniform cells and shows every thumbnail whole rather than cropping it to a square,
    so a portrait frame is letterboxed instead of having its top and bottom cut off. The
    **minus and plus** buttons above the grid pick one of four cell sizes, which changes how
@@ -94,7 +101,7 @@ but has not yet been built on an Android toolchain.
 
 Model export is out of scope for this version.
 
-## Classification modes
+## Project modes
 
 The mode is picked when the project is created and shown in the project header. It cannot
 be switched afterwards.
@@ -108,8 +115,13 @@ be switched afterwards.
    images whose yes or no call for that label was right. The Use view shows an
    independent yes or no with a confidence for every label rather than a winner, and the
    teach chips become toggles that add one frame with the whole set you picked.
+- **Detect**: labels sit on drawn rectangles rather than on whole pictures, so one picture
+   can hold several objects in different places. The Label view becomes a box annotator
+   and the label rail picks the pencil instead of a folder: every picture is always shown,
+   and the count next to a label is how many boxes carry it. Training and live detection
+   are not built yet, so Train and Use show a placeholder until the detection head lands.
 
-Images with no labels are ignored by training in both modes.
+Images with no labels are ignored by training in single and multi mode.
 
 ## Background retraining and the checkpoint
 
@@ -168,12 +180,12 @@ Shapes.belo/
 ```jsonc
 {
   "format": "belo-project",
-  "formatVersion": 2,
+  "formatVersion": 3,
   "appVersion": "0.4.3",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
-  "mode": "single",              // single | multi, fixed at creation
+  "mode": "single",              // single | multi | detect, fixed at creation
   "labels": [{ "id": "lbl_...", "name": "Circle", "color": 0, "createdAt": "..." }],
   "images": [
     {
@@ -181,6 +193,14 @@ Shapes.belo/
       "file": "img_....jpg",     // relative to images/
       "labelId": "lbl_...",      // null means unlabeled
       "labelIds": ["lbl_..."],   // multi mode only, the full label set
+      "boxes": [                 // detect mode only, empty means a background picture
+        {
+          "id": "box_...",
+          "labelId": "lbl_...",
+          "x": 0.11, "y": 0.42,  // top left corner, 0..1 of the stored picture
+          "w": 0.3, "h": 0.25
+        }
+      ],
       "source": "import",        // import | capture | feedback
       "addedAt": "..."
     }
@@ -211,6 +231,10 @@ working classifier without retraining.
   stored head. A version 1 manifest loads as `mode: "single"` with `labelIds` derived from
   `labelId`, which is exactly its old behavior, and is written back as version 2 on the
   next save. A head written without a mode is read as softmax.
+- **3**: adds the `detect` mode and, in that mode only, per image `boxes` in normalized
+  0..1 coordinates. Version 1 and 2 manifests load exactly as before and never grow a
+  `boxes` field; boxes are clamped back inside the picture on load, and anything smaller
+  than two percent of an edge is dropped as a stray tap.
 
 New projects are created in `~/Documents/Belo` by default. Any `.belo` folder elsewhere
 can be opened with the file picker. The trash button on a project card deletes the bundle
@@ -265,6 +289,8 @@ src/
     ml/features.ts        truncated MobileNet feature extractor
     ml/classifier.ts      dense head: build, train, score, serialize
   views/                  HomeView, LabelView, CaptureModal, TrainView, UseView
+                          BoxAnnotator (detect mode box drawing)
+                          DetectSoonView (detect mode Train and Use placeholder)
   styles/                 tokens, base, ui primitives, app layout
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
 public/models/            bundled MobileNet weights
