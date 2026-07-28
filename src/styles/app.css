@@ -1844,70 +1844,6 @@
   line-height: 1.6;
 }
 
-/* ---------- Detect: train and use placeholder ---------- */
-.soon {
-  display: grid;
-  place-items: center;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--s6) var(--s5);
-}
-
-.soon__panel {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s3);
-  width: min(560px, 100%);
-  padding: var(--s5);
-  background: var(--panel);
-  border: var(--border-w) solid var(--ink);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
-}
-
-.soon__mark {
-  display: grid;
-  place-items: center;
-  width: 60px;
-  height: 60px;
-  background: var(--accent);
-  border: var(--border-w) solid var(--ink);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-}
-
-.soon__title {
-  font-family: var(--font-display);
-  font-size: clamp(1.3rem, 3.4vw, 1.9rem);
-  line-height: 1.05;
-}
-
-.soon__text {
-  line-height: 1.5;
-}
-
-.soon__stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--s2);
-  width: 100%;
-  margin: 0;
-}
-
-.soon__stats > div {
-  padding: var(--s2) var(--s3);
-  background: var(--paper);
-  border: var(--border-w-thin) solid var(--ink);
-  border-radius: var(--radius);
-}
-
-.soon__stats dd {
-  margin: 0;
-  font-size: 1.4rem;
-  font-weight: 700;
-}
-
 /* ---------- Phone layout ---------- */
 @media (max-width: 700px) {
   /* No project means no bottom tab bar, so only the home inset is reserved. */
@@ -2217,14 +2153,6 @@
 
   .anno__bar .eyebrow {
     font-size: 10px;
-  }
-
-  .soon {
-    padding: var(--s4) var(--s3);
-  }
-
-  .soon__panel {
-    padding: var(--s4);
   }
 
   .capture {
