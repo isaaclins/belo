@@ -4,7 +4,7 @@ An app for training image classifiers on your own pictures. Collect images, labe
 them, train, and use the result live from your camera. Everything runs on the device:
 no account, no upload, no network calls at runtime.
 
-Version 0.4.1. Desktop and iOS are supported. Android is code-complete but has not yet
+Version 0.4.2. Desktop and iOS are supported. Android is code-complete but has not yet
 been built on an Android toolchain.
 
 ## What it does
@@ -12,7 +12,11 @@ been built on an Android toolchain.
 1. **Label.** Create labels, then fill them by dragging in files or whole folders,
    importing from disk, or holding the capture button for a webcam burst. Images can be
    selected and moved between labels or deleted. In a multi label project the same
-   selection toggles several labels on and off instead of moving between them.
+   selection toggles several labels on and off instead of moving between them. The grid
+   uses uniform cells and shows every thumbnail whole rather than cropping it to a square,
+   so a portrait frame is letterboxed instead of having its top and bottom cut off. The
+   **minus and plus** buttons above the grid pick one of four cell sizes, which changes how
+   many fit per row; the choice is remembered across restarts and applies to every project.
 2. **Train.** One click trains a classifier and reports live progress, training accuracy,
    a holdout score and a per label score. Every image is scored afterwards so you can see
    exactly which ones the model still gets wrong. **Move to X** on a wrong card accepts what
@@ -109,7 +113,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 2,
-  "appVersion": "0.4.1",
+  "appVersion": "0.4.2",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -174,8 +178,8 @@ cd src-tauri && cargo check
 
 Useful extras:
 
-- `node scripts/make-icon.mjs` regenerates `src-tauri/app-icon.png`, then
-  `npx tauri icon src-tauri/app-icon.png` rebuilds the icon set.
+- `npm run icons` redraws the app mark and rebuilds every platform icon set. See
+  [The app mark](#the-app-mark).
 - `npm run assets` refreshes the bundled TensorFlow.js WASM binaries.
 - `npm run check:camera` runs the camera seam against a mocked `MediaDevices`, which covers
   device switching, stale mobile ids and hot plug on a machine with a single webcam.
@@ -185,11 +189,15 @@ Useful extras:
 ```
 src/
   App.tsx                 shell, top bar, stage tabs
+  assets/logo.svg         the canonical Belo mark
   components/ui.tsx       modal, meter, toasts, empty state
+  components/BeloMark.tsx          the mark as a component, top bar and home hero
   components/AttentionOverlay.tsx  heat map and boxes drawn over the live video
   components/CameraPicker.tsx      camera select shown wherever live video runs
+  components/ThumbSizePicker.tsx   the four step image grid cell size control
   lib/
     attention.ts          overlay geometry and thresholding, pure functions
+    thumbSize.ts          grid cell size, remembered per machine
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
     capture.ts            CameraSource seam: the only module that calls getUserMedia
     store.ts              application store: project, disk writes, feature cache, head
@@ -205,6 +213,26 @@ src/
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
 public/models/            bundled MobileNet weights
 ```
+
+### The app mark
+
+One drawing is used everywhere: the top bar, the home hero, the dock icon, the Windows
+tiles and the iOS home screen. It is a yellow field inside a thick ink frame, a bold ink
+ring in the upper left and a pink chip offset over its lower right, drawn on a 512 unit
+grid with flat color and no gradients, blur or transparency.
+
+The same geometry is written three times and the three must be kept in step:
+
+- `src/assets/logo.svg`, the vector master.
+- `src/components/BeloMark.tsx`, the in-app component, which can swap its frame to paper
+  so the mark still reads on the ink top bar.
+- `scripts/make-icon.mjs`, which rasterizes it for the icon pipeline.
+
+`npm run icons` runs the whole pipeline: it draws `src-tauri/app-icon.png` at 1024, hands
+that to `tauri icon` for the desktop and Windows sets, then redraws the iOS
+`AppIcon.appiconset` images itself. That last step matters because `tauri icon` writes iOS
+PNGs with an alpha channel and Apple rejects app icons that have one, so those images are
+drawn at their exact final size as PNG color type 2, with no alpha and no resampling.
 
 ## Mobile
 

@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Local image classifier trainer",
   "scripts": {
     "dev": "npm run assets && vite",
