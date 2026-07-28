@@ -15,7 +15,10 @@
 <meta property="og:url" content="https://isaaclins.github.io/belo/" />
 <meta property="og:image" content="https://isaaclins.github.io/belo/mark.svg" />
 <meta name="twitter:card" content="summary" />
-<link rel="stylesheet" href="styles.css" />
+<!-- The custom domain sits behind a CDN that holds static assets for four
+     hours, so the stylesheet and the script carry a version query. Bump it
+     whenever either file changes. -->
+<link rel="stylesheet" href="styles.css?v=2" />
 </head>
 <body>
 
@@ -516,6 +519,6 @@ npm run tauri build</code></pre>
   <p class="footer__meta">Version 0.4.3 &middot; MIT</p>
 </footer>
 
-<script src="main.js" defer></script>
+<script src="main.js?v=2" defer></script>
 </body>
 </html>
