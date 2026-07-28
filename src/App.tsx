@@ -58,7 +58,7 @@ function ModeBadge() {
   return (
     <span className="badge badge--idle topbar__mode" title={title}>
       {mode}
-      <span className="topbar__mode-word"> {mode === "detect" ? "boxes" : "label"}</span>
+      <span className="topbar__mode-word">&nbsp;{mode === "detect" ? "boxes" : "label"}</span>
     </span>
   );
 }

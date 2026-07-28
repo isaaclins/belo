@@ -146,9 +146,17 @@ export function BoxAnnotator({
     const stage = stageRef.current;
     if (!stage) return;
     const measure = () => {
-      const rect = stage.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
-      const w = Math.min(rect.width, rect.height * ratio);
+      // clientWidth and clientHeight still carry the padding, and a frame sized
+      // from those runs off the bottom of the stage.
+      const style = getComputedStyle(stage);
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const available = {
+        w: stage.clientWidth - padX,
+        h: stage.clientHeight - padY,
+      };
+      if (available.w <= 0 || available.h <= 0) return;
+      const w = Math.min(available.w, available.h * ratio);
       setFrame({ w, h: w / ratio });
     };
     measure();
@@ -194,12 +202,15 @@ export function BoxAnnotator({
       dragRef.current = next;
       setPreview({ boxId: next.boxId, rect: next.rect });
     };
-    const onUp = () => {
+    const onUp = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag) return;
       dragRef.current = null;
       setPreview(null);
-      commit(drag);
+      // The release point counts: a pointer can come up somewhere no move event
+      // ever reported, and committing the stale rectangle loses that last bit
+      // of the gesture.
+      commit(event.type === "pointercancel" ? drag : advance(drag, pointAt(event)));
     };
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
