@@ -616,6 +616,23 @@
 }
 
 @media (max-width: 700px) {
+  .modepick {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .modepick__opt {
+    min-height: 76px;
+    padding: var(--s3);
+  }
+
+  .modepick__title {
+    font-size: 14px;
+  }
+
+  .modepick__text {
+    font-size: 13px;
+  }
+
   .btn,
   .iconbtn,
   .chip,

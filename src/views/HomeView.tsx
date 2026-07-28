@@ -9,18 +9,18 @@ import type { ProjectMode, ProjectSummary } from "../lib/types";
 const MODES: { id: ProjectMode; title: string; text: string }[] = [
   {
     id: "single",
-    title: "One label per image",
-    text: "Every image belongs to exactly one label and the model picks a single winner.",
+    title: "Classify one answer",
+    text: "Belo gives each image one best label.",
   },
   {
     id: "multi",
-    title: "Many labels per image",
-    text: "An image can be X and Y but not Z. Each label gets its own yes or no.",
+    title: "Classify many answers",
+    text: "Belo gives every label its own yes or no, so one image can have several labels.",
   },
   {
     id: "detect",
-    title: "Find and box each object",
-    text: "You draw a rectangle around every thing you care about, so one picture can hold several of them in different places.",
+    title: "Detect objects",
+    text: "Draw a box around each thing. Belo learns what it is and where it sits in the picture.",
   },
 ];
 
@@ -187,7 +187,7 @@ export function HomeView() {
           </div>
 
           <div className="field">
-            <span className="field__label">Classification mode</span>
+            <span className="field__label">What should Belo learn?</span>
             <div className="modepick">
               {MODES.map((option) => (
                 <button

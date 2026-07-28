@@ -1616,8 +1616,14 @@
   z-index: 120;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--paper);
+  padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
 }
 
 .anno__bar {
@@ -2115,23 +2121,26 @@
     height: 30px;
   }
 
-  /* Two rows on a phone: picture over controls, with the picture keeping the
-     space it needs to be drawn on. */
+  /* Two rows on a phone: picture over a bounded, scrolling control tray. The
+     stage gets every remaining pixel of the visual viewport. */
   .anno__body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
+    overflow: hidden;
   }
 
   .anno__stage {
     padding: var(--s3);
+    overflow: hidden;
   }
 
   .anno__side {
     flex-direction: row;
     flex-wrap: wrap;
     gap: var(--s3);
-    max-height: 42vh;
+    max-height: min(42dvh, 320px);
     padding: var(--s3);
+    padding-bottom: max(var(--s3), env(safe-area-inset-bottom));
     border-left: 0;
     border-top: var(--border-w) solid var(--ink);
   }
@@ -2142,17 +2151,29 @@
   }
 
   .anno__labels {
-    max-height: 24vh;
+    max-height: 24dvh;
   }
 
   .anno__bar {
+    min-width: 0;
     gap: var(--s2);
     padding: var(--s2) var(--s3);
     padding-top: calc(var(--s2) + env(safe-area-inset-top));
   }
 
+  .anno__bar .anno__mark,
+  .anno__bar > .badge,
+  .anno__bar > .spacer {
+    display: none;
+  }
+
   .anno__bar .eyebrow {
+    min-width: 0;
+    margin-right: auto;
+    overflow: hidden;
     font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .capture {
@@ -2167,6 +2188,7 @@
   .train {
     gap: var(--s4);
     padding: var(--s3) var(--s3) var(--s5);
+    overflow-x: hidden;
   }
 
   .train__stage {
@@ -2190,6 +2212,17 @@
     gap: var(--s4);
   }
 
+  .train__side,
+  .dcurve,
+  .dcurve svg {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .dgrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .train__filters {
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -2208,6 +2241,32 @@
     grid-template-columns: 1fr;
     gap: var(--s4);
     padding: var(--s3) var(--s3) var(--s5);
+    overflow-x: hidden;
+  }
+
+  .use--detect .card__head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .use--detect .card__tools {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .use--detect .threshold {
+    width: 100%;
+  }
+
+  .threshold__step {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .detectbox__tag {
+    max-width: min(140px, calc(100vw - 48px));
+    font-size: 9px;
+    line-height: 14px;
   }
 
   .use--blank {
