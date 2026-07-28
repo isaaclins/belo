@@ -238,6 +238,7 @@ export function BoxAnnotator({
     // The armed pencil hands the press straight through to the picture, which
     // is the only way to draw inside a box that already covers everything.
     if (drawTool) {
+      event.stopPropagation();
       startDraw(event);
       return;
     }
