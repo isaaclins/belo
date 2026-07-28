@@ -252,8 +252,9 @@ function lossFor(
   positiveMask: tf.Tensor2D,
   classMask: tf.Tensor2D,
   norm: number,
+  training: boolean,
 ): { total: tf.Scalar; loc: tf.Scalar; cls: tf.Scalar } {
-  const [locPred, logits] = model.apply(xs, { training: true }) as tf.Tensor[];
+  const [locPred, logits] = model.apply(xs, { training }) as tf.Tensor[];
   const logp = tf.logSoftmax(logits as tf.Tensor3D, -1);
   const ce = tf.sum(tf.mul(classTargets, logp), -1).mul(-1) as tf.Tensor2D;
   const cls = tf.sum(ce.mul(classMask)).div(norm) as tf.Scalar;
@@ -304,7 +305,7 @@ function runBatch(
       const held = tf.tidy(() => {
         let snapshot: { loc: number; cls: number } = { loc: 0, cls: 0 };
         const total = optimizer.minimize(() => {
-          const loss = lossFor(detector.model, xs, classT, locT, posT, maskT, norm);
+          const loss = lossFor(detector.model, xs, classT, locT, posT, maskT, norm, true);
           snapshot = { loc: loss.loc.dataSync()[0], cls: loss.cls.dataSync()[0] };
           return loss.total;
         }, true) as tf.Scalar;
@@ -315,7 +316,7 @@ function runBatch(
       parts = held;
     } else {
       parts = tf.tidy(() => {
-        const loss = lossFor(detector.model, xs, classT, locT, posT, maskT, norm);
+        const loss = lossFor(detector.model, xs, classT, locT, posT, maskT, norm, false);
         return {
           total: loss.total.dataSync()[0],
           loc: loss.loc.dataSync()[0],
@@ -357,14 +358,14 @@ export async function trainDetector(input: DetectTrainInput): Promise<DetectTrai
 
   try {
     for (let epoch = 0; epoch < settings.epochs; epoch += 1) {
-      if (input.shouldStop?.()) break;
+      if (input.shouldStop?.()) throw new Error("Training cancelled");
       const order = shuffled(prepared.length);
       let total = 0;
       let loc = 0;
       let cls = 0;
       let steps = 0;
       for (let start = 0; start < order.length; start += batchSize) {
-        if (input.shouldStop?.()) break;
+        if (input.shouldStop?.()) throw new Error("Training cancelled");
         const batch = order.slice(start, start + batchSize).map((i) => prepared[i]);
         const parts = runBatch(detector, batch, optimizer);
         total += parts.total;
@@ -380,6 +381,7 @@ export async function trainDetector(input: DetectTrainInput): Promise<DetectTrai
         let sum = 0;
         let batches = 0;
         for (let start = 0; start < validation.length; start += batchSize) {
+          if (input.shouldStop?.()) throw new Error("Training cancelled");
           sum += runBatch(detector, validation.slice(start, start + batchSize), null).total;
           batches += 1;
         }
@@ -398,17 +400,17 @@ export async function trainDetector(input: DetectTrainInput): Promise<DetectTrai
       input.onProgress?.(record);
       await tf.nextFrame();
     }
+
+    // The run keeps the weights it ends on. The holdout loss is reported
+    // because it is the honest number to show, but it is deliberately not used
+    // to pick an epoch: hard negative mining makes it a moving target.
+    return { detector, history };
+  } catch (err) {
+    detector.model.dispose();
+    throw err;
   } finally {
     optimizer.dispose();
   }
-
-  // The run keeps the weights it ends on. The holdout loss is reported because
-  // it is the honest number to show, but it is deliberately not used to pick an
-  // epoch: with hard negative mining it measures the loss on whichever
-  // negatives are hardest right now, so it climbs while the head is still
-  // getting better, and stopping on it cost fifteen points of held out recall
-  // when it was tried.
-  return { detector, history };
 }
 
 /**

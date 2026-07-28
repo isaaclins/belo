@@ -152,10 +152,11 @@ export function BoxAnnotator({
       if (!drag) return;
       dragRef.current = null;
       setPreview(null);
+      if (event.type === "pointercancel") return;
       // The release point counts: a pointer can come up somewhere no move event
       // ever reported, and committing the stale rectangle loses that last bit
       // of the gesture.
-      commit(event.type === "pointercancel" ? drag : advance(drag, pointAt(event)));
+      commit(advance(drag, pointAt(event)));
     };
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);

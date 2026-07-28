@@ -6,6 +6,7 @@ import type * as tfTypes from "@tensorflow/tfjs";
 import { storage, type ImportRef } from "./storage";
 import {
   boxesOf,
+  canRestoreModel,
   DETECT_MIN_IMAGES,
   hasLabel,
   labelsOf,
@@ -192,7 +193,7 @@ interface State {
   createProject: (name: string, mode?: ProjectMode) => Promise<void>;
   openProject: (path: string) => Promise<void>;
   openProjectDialog: () => Promise<void>;
-  closeProject: () => void;
+  closeProject: () => Promise<void>;
   forgetProject: (path: string) => Promise<void>;
   /** Erases a .belo bundle from disk and drops it from the list. */
   deleteProject: (path: string) => Promise<void>;
@@ -215,7 +216,7 @@ interface State {
     source: Drawable,
     labels: string | string[] | null,
     origin: ImageSource,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   moveImages: (imageIds: string[], labelId: string | null) => void;
   /** Train view: relabels a scored image to what the model read and refreshes the results. */
   acceptPrediction: (imageId: string) => void;
@@ -259,6 +260,7 @@ const spatialCache = new Map<string, Float32Array>();
 let head: tfTypes.Sequential | null = null;
 let detector: Detector | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let saveInFlight: Promise<void> | null = null;
 
 /** How long the app waits after the last correction before retraining itself. */
 const AUTO_RETRAIN_DELAY_MS = 4000;
@@ -392,6 +394,7 @@ export const useStore = create<State>((set, get) => {
   // warning but not worth throwing away a working classifier.
   const dropModel = () => {
     cancelAutoRetrain();
+    if (currentRun) currentRun.stop = true;
     head?.dispose();
     head = null;
     detector?.model.dispose();
@@ -405,7 +408,10 @@ export const useStore = create<State>((set, get) => {
   };
 
   const markStale = () => {
-    if (get().hasModel) set({ stale: true });
+    if (currentRun) currentRun.stop = true;
+    if (!get().hasModel) return;
+    touch({ modelStale: true });
+    set({ stale: true });
   };
 
   /** Loads and caches the embedding for one stored image. */
@@ -581,6 +587,7 @@ export const useStore = create<State>((set, get) => {
       },
     });
 
+    let trained: Detector | null = null;
     try {
       const backend = await initBackend();
       set({ backend });
@@ -620,15 +627,25 @@ export const useStore = create<State>((set, get) => {
           }));
         },
       });
+      trained = result.detector;
+
+      if (run.stop) throw new Error("Training cancelled");
+      if (get().path !== path || get().manifest?.updatedAt !== manifest.updatedAt) {
+        throw new Error("The project changed during training. Train again.");
+      }
 
       set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each picture" } }));
       const scoredSet = validation.length > 0 ? validation : samples;
-      const scored = scoreDetections(scoredSet, labelIds, result.detector);
+      const scored = scoreDetections(scoredSet, labelIds, trained);
+
+      await storage.writeDetector(path, JSON.stringify(serializeDetector(trained)));
+      if (run.stop || get().path !== path || get().manifest?.updatedAt !== manifest.updatedAt) {
+        throw new Error("The project changed during training. Train again.");
+      }
 
       detector?.model.dispose();
-      detector = result.detector;
-
-      await storage.writeDetector(path, JSON.stringify(serializeDetector(result.detector)));
+      detector = trained;
+      trained = null;
 
       const truth = scored.stats.reduce((sum, stat) => sum + stat.truth, 0);
       const found = scored.stats.reduce((sum, stat) => sum + stat.found, 0);
@@ -637,6 +654,7 @@ export const useStore = create<State>((set, get) => {
       const precision = predicted === 0 ? 0 : found / predicted;
 
       touch({
+        modelStale: false,
         model: {
           trainedAt: new Date().toISOString(),
           mode: "detect",
@@ -675,8 +693,16 @@ export const useStore = create<State>((set, get) => {
       }));
       await get().saveNow();
     } catch (err) {
-      set((s) => ({ train: { ...s.train, phase: "error", message: errorText(err) } }));
-      get().toast(errorText(err), "bad");
+      if (run.stop) {
+        if (get().path === path) {
+          set({ train: { ...idleTrainState, message: "Training stopped" } });
+        }
+      } else if (get().path === path) {
+        set((s) => ({ train: { ...s.train, phase: "error", message: errorText(err) } }));
+        get().toast(errorText(err), "bad");
+      }
+    } finally {
+      trained?.model.dispose();
     }
   };
 
@@ -764,8 +790,15 @@ export const useStore = create<State>((set, get) => {
         },
       });
 
-      if (run.stop && auto) {
+      if (
+        run.stop ||
+        get().path !== path ||
+        get().manifest?.updatedAt !== manifest.updatedAt
+      ) {
         result.model.dispose();
+        if (!auto && get().path === path) {
+          set({ train: { ...idleTrainState, message: "Training stopped" } });
+        }
         return;
       }
 
@@ -783,6 +816,11 @@ export const useStore = create<State>((set, get) => {
         }
       }
 
+      if (run.stop || get().path !== path) {
+        result.model.dispose();
+        return;
+      }
+
       head?.dispose();
       head = result.model;
 
@@ -797,6 +835,7 @@ export const useStore = create<State>((set, get) => {
       await storage.writeModel(path, JSON.stringify(stored));
 
       touch({
+        modelStale: false,
         model: {
           trainedAt: new Date().toISOString(),
           mode,
@@ -829,6 +868,12 @@ export const useStore = create<State>((set, get) => {
         // A cancelled or failed background run is not worth a red banner: the
         // old head is still live and the next correction tries again.
         if (!run.stop) get().toast(`Background retraining stopped: ${errorText(err)}`, "bad");
+        return;
+      }
+      if (run.stop) {
+        if (get().path === path) {
+          set({ train: { ...idleTrainState, message: "Training stopped" } });
+        }
         return;
       }
       set((s) => ({ train: { ...s.train, phase: "error", message: errorText(err) } }));
@@ -1014,30 +1059,51 @@ export const useStore = create<State>((set, get) => {
         if (manifest.mode === "detect") {
           const storedDetector = await storage.readDetector(path);
           if (storedDetector) {
-            await loadFeatureModel();
             const parsed = JSON.parse(storedDetector) as StoredDetector;
-            const restored = deserializeDetector(parsed);
-            if (restored) {
-              detector = restored;
-              set({ hasModel: true, stale: false, modelLabelIds: parsed.labelIds });
+            if (canRestoreModel(manifest, "detect", parsed.labelIds)) {
+              await loadFeatureModel();
+              const restored = deserializeDetector(parsed);
+              if (restored) {
+                if (get().path === path) {
+                  detector = restored;
+                  set({
+                    hasModel: true,
+                    stale: Boolean(manifest.modelStale),
+                    modelLabelIds: parsed.labelIds,
+                  });
+                } else {
+                  restored.model.dispose();
+                }
+              }
             }
           }
-          set({ hasCheckpoint: false });
+          if (get().path === path) set({ hasCheckpoint: false });
           return;
         }
 
         // Restore a previously trained head so the Use view works immediately.
         const stored = await storage.readModel(path);
         if (stored) {
-          await loadFeatureModel();
           const parsed = JSON.parse(stored) as StoredHead;
-          const restored = deserializeHead(parsed, manifest.settings);
-          if (restored) {
-            head = restored;
-            set({ hasModel: true, stale: false, modelLabelIds: parsed.labelIds });
+          const storedMode: ProjectMode = parsed.mode === "multi" ? "multi" : "single";
+          if (canRestoreModel(manifest, storedMode, parsed.labelIds)) {
+            await loadFeatureModel();
+            const restored = deserializeHead(parsed, manifest.settings);
+            if (restored) {
+              if (get().path === path) {
+                head = restored;
+                set({
+                  hasModel: true,
+                  stale: Boolean(manifest.modelStale),
+                  modelLabelIds: parsed.labelIds,
+                });
+              } else {
+                restored.dispose();
+              }
+            }
           }
         }
-        set({ hasCheckpoint: await storage.hasCheckpoint(path) });
+        if (get().path === path) set({ hasCheckpoint: await storage.hasCheckpoint(path) });
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
@@ -1052,7 +1118,18 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    closeProject() {
+    async closeProject() {
+      if (currentRun) {
+        currentRun.stop = true;
+        await currentRun.done;
+      }
+      if (get().dirty) {
+        await get().saveNow();
+        if (get().dirty) {
+          get().toast("The project could not be saved, so it was left open", "bad");
+          return;
+        }
+      }
       if (saveTimer) clearTimeout(saveTimer);
       forgetCaches();
       dropModel();
@@ -1092,20 +1169,33 @@ export const useStore = create<State>((set, get) => {
     },
 
     async saveNow() {
-      const { path, manifest } = get();
-      if (!path || !manifest) return;
       if (saveTimer) {
         clearTimeout(saveTimer);
         saveTimer = null;
       }
+      if (saveInFlight) {
+        try {
+          await saveInFlight;
+        } catch {
+          // The caller that started the write already reported its error.
+        }
+      }
+
+      const { path, manifest } = get();
+      if (!path || !manifest) return;
       set({ saving: true });
+      const write = storage.writeManifest(path, JSON.stringify(manifest, null, 2));
+      saveInFlight = write;
       try {
-        await storage.writeManifest(path, JSON.stringify(manifest, null, 2));
-        set({ dirty: false });
+        await write;
+        if (get().path === path && get().manifest === manifest) set({ dirty: false });
       } catch (err) {
         get().toast(errorText(err), "bad");
       } finally {
-        set({ saving: false });
+        if (saveInFlight === write) {
+          saveInFlight = null;
+          set({ saving: false });
+        }
       }
     },
 
@@ -1124,7 +1214,7 @@ export const useStore = create<State>((set, get) => {
         color: manifest.labels.length % SWATCH_COUNT,
         createdAt: new Date().toISOString(),
       };
-      touch({ labels: [...manifest.labels, label] });
+      touch({ labels: [...manifest.labels, label], model: null, modelStale: false });
       set({ activeLabelId: label.id });
       dropModel();
       return label.id;
@@ -1176,6 +1266,7 @@ export const useStore = create<State>((set, get) => {
               : img;
           }),
         model: null,
+        modelStale: false,
       });
       dropModel();
       if (get().activeLabelId === id) set({ activeLabelId: labels[0]?.id ?? null });
@@ -1187,7 +1278,12 @@ export const useStore = create<State>((set, get) => {
 
     addBox(imageId, labelId, rect) {
       const manifest = get().manifest;
-      if (!manifest || manifest.mode !== "detect") return null;
+      if (
+        !manifest ||
+        manifest.mode !== "detect" ||
+        !manifest.labels.some((label) => label.id === labelId) ||
+        !manifest.images.some((image) => image.id === imageId)
+      ) return null;
       const clean = normalizeRect(rect);
       if (!clean) return null;
       const box: BoxRecord = { id: makeId("box"), labelId, ...clean };
@@ -1220,7 +1316,11 @@ export const useStore = create<State>((set, get) => {
 
     setBoxLabel(imageId, boxId, labelId) {
       const manifest = get().manifest;
-      if (!manifest || manifest.mode !== "detect") return;
+      if (
+        !manifest ||
+        manifest.mode !== "detect" ||
+        !manifest.labels.some((label) => label.id === labelId)
+      ) return;
       touch({
         images: manifest.images.map((img) =>
           img.id === imageId
@@ -1322,17 +1422,24 @@ export const useStore = create<State>((set, get) => {
 
     async addFromDrawable(source, labels, origin) {
       const manifest = get().manifest;
-      if (!manifest) return;
+      const path = get().path;
+      if (!manifest || !path) return false;
       try {
         const jpeg = normalizeToJpegBase64(source);
         const record = await writeImageRecord(jpeg, labels, origin);
+        if (get().path !== path) {
+          await storage.deleteImages(path, [record.file]);
+          return false;
+        }
         touch({ images: [...get().manifest!.images, record] });
         markStale();
         // Corrections from the Use view fold themselves in without a trip to
         // the Train view, once the taps stop coming.
         if (origin === "feedback") scheduleAutoRetrain();
+        return true;
       } catch (err) {
         get().toast(errorText(err), "bad");
+        return false;
       }
     },
 
@@ -1478,7 +1585,7 @@ export const useStore = create<State>((set, get) => {
         // A checkpoint written for a project that had no model metadata leaves
         // nothing to restore, and keeping the newer numbers would describe the
         // wrong weights, so the honest value is none.
-        touch({ model: manifest.checkpoint ?? null, checkpoint: null });
+        touch({ model: manifest.checkpoint ?? null, checkpoint: null, modelStale: true });
         set({
           hasModel: true,
           hasCheckpoint: false,

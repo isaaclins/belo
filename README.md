@@ -296,6 +296,7 @@ Shapes.belo/
     "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15 }
   },
   "checkpoint": null,            // same shape as model, describes head.prev.json
+  "modelStale": false,           // true when data changed after this model trained
   "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15 }
 }
 ```
@@ -316,8 +317,8 @@ and multi projects are created with the same settings they always were.
 - **1**: single label projects. One `labelId` per image, no `mode`, no `checkpoint`.
 - **2**: adds `mode`, per image `labelIds` in multi mode, `checkpoint`, and `mode` on the
   stored head. A version 1 manifest loads as `mode: "single"` with `labelIds` derived from
-  `labelId`, which is exactly its old behavior, and is written back as version 2 on the
-  next save. A head written without a mode is read as softmax.
+  `labelId`, which is exactly its old behavior, and is written back at the current schema
+  version on the next save. A head written without a mode is read as softmax.
 - **3**: adds the `detect` mode and, in that mode only, per image `boxes` in normalized
   0..1 coordinates. Version 1 and 2 manifests load exactly as before and never grow a
   `boxes` field; boxes are clamped back inside the picture on load, and anything smaller
@@ -348,6 +349,7 @@ Detection release verification:
 ```bash
 npm run check:boxes       # manifest v3 and one-finger box geometry
 npm run check:detect      # anchors, loss inputs, decoding and scoring
+npm run check:store       # stale-model persistence and serialized manifest saves
 npm run check:camera      # live camera switching seam
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
@@ -366,15 +368,18 @@ Useful extras:
   overlap, offset encode and decode round trips, anchor matching including the forced best
   match, cell standardizing, hard negative mining, suppression and the precision and recall
   matcher. No TensorFlow, no DOM.
+- `npm run check:store` uses an in-memory storage double to prove box edits persist the
+  stale-model flag, overlapping manifest writes serialize in order and Close flushes the latest
+  box deletion. It uses only a fake `/tmp` handle and never opens a real project.
 - `npm run check:learning` is the proof that the detector learns. It builds a synthetic
   detect project of 64 pictures with coloured shapes at known positions, extracts real
   features with the bundled MobileNet on the WASM backend, trains the head with the
   settings a new detect project is created with, and then measures on 24 pictures it never
-  saw. The run is seeded. It currently finds 75 percent of the held out boxes with 88
-  percent of its detections right and a mean overlap of 0.68, against 100 percent on the
+  saw. The run is seeded. It currently finds 80 percent of the held out boxes with 91
+  percent of its detections right and a mean overlap of 0.69, against 100 percent on the
   pictures it trained on. It also rebuilds each held out spatial map as the tensor handed
   to the Use view, runs the exact Use inference seam and checks both placement and tensor
-  cleanup; 21 of 24 frames contain a correctly placed box at half overlap. It takes about
+  cleanup; 22 of 24 frames contain a correctly placed box at half overlap. It takes about
   half a minute, and feature extraction is cached in the temp folder for reruns. Needs
   Node 22.15 or newer.
 

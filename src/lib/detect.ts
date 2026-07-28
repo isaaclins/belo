@@ -188,11 +188,11 @@ export interface Match {
  * - An anchor over the positive threshold answers for its best box, an anchor
  *   under the negative threshold is background, and everything between is
  *   ignored so half overlapping anchors do not teach the head to say nothing.
- * - Every ground truth box then force matches its single best anchor, whatever
- *   the overlap was. Without that, a box shaped unlike every anchor would never
- *   appear as a positive and could never be learned. Two boxes fighting over
- *   the same best anchor is possible and the later one wins, which is the same
- *   compromise the reference implementations make.
+ * - Every ground truth box then force matches a distinct anchor, whatever the
+ *   overlap was. Without that, a box shaped unlike every anchor would never
+ *   appear as a positive and could never be learned. The forced pairs are
+ *   chosen greedily by overlap, so nearby boxes cannot overwrite each other's
+ *   only positive anchor.
  */
 export function matchAnchors(
   anchors: Anchor[],
@@ -203,18 +203,18 @@ export function matchAnchors(
   const truth = new Int32Array(anchors.length).fill(-1);
   const state = new Int8Array(anchors.length);
   const rects = anchors.map(anchorRect);
+  const overlaps = boxes.map(() => new Array<number>(anchors.length).fill(0));
 
-  const best = boxes.map(() => ({ anchor: -1, overlap: -1 }));
   for (let a = 0; a < anchors.length; a += 1) {
     let bestBox = -1;
     let bestOverlap = 0;
     for (let b = 0; b < boxes.length; b += 1) {
       const overlap = iou(rects[a], boxes[b]);
+      overlaps[b][a] = overlap;
       if (overlap > bestOverlap) {
         bestOverlap = overlap;
         bestBox = b;
       }
-      if (overlap > best[b].overlap) best[b] = { anchor: a, overlap };
     }
     if (bestBox >= 0 && bestOverlap >= posIoU) {
       truth[a] = bestBox;
@@ -226,11 +226,26 @@ export function matchAnchors(
     }
   }
 
-  for (let b = 0; b < boxes.length; b += 1) {
-    const pick = best[b];
-    if (pick.anchor < 0 || pick.overlap <= 0) continue;
-    truth[pick.anchor] = b;
-    state[pick.anchor] = 1;
+  const unmatchedBoxes = new Set(boxes.map((_, index) => index));
+  const availableAnchors = new Set(anchors.map((_, index) => index));
+  while (unmatchedBoxes.size > 0 && availableAnchors.size > 0) {
+    let bestBox = -1;
+    let bestAnchor = -1;
+    let bestOverlap = -1;
+    for (const b of unmatchedBoxes) {
+      for (const a of availableAnchors) {
+        const overlap = overlaps[b][a];
+        if (overlap > bestOverlap) {
+          bestBox = b;
+          bestAnchor = a;
+          bestOverlap = overlap;
+        }
+      }
+    }
+    truth[bestAnchor] = bestBox;
+    state[bestAnchor] = 1;
+    unmatchedBoxes.delete(bestBox);
+    availableAnchors.delete(bestAnchor);
   }
 
   let positives = 0;

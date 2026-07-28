@@ -198,7 +198,11 @@ export default function App() {
                 );
               })}
             </nav>
-            <button className="btn btn--sm topbar__close" onClick={closeProject} aria-label="Close project">
+            <button
+              className="btn btn--sm topbar__close"
+              onClick={() => void closeProject()}
+              aria-label="Close project"
+            >
               <SignOut size={15} weight="bold" /> <span>Close</span>
             </button>
           </>

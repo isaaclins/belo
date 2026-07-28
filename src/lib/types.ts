@@ -5,8 +5,8 @@ export const IMAGE_SIZE = 224;
 /**
  * 1: single label projects, one labelId per image.
  * 2: adds project mode and, in multi mode, labelIds per image. Version 1
- *    manifests load unchanged and are written back as version 2 on the next
- *    save, with mode "single", which is exactly their old behavior.
+ *    manifests load unchanged and are written back at the current version on
+ *    the next save, with mode "single", which is exactly their old behavior.
  * 3: adds the detect mode and, in that mode only, per image boxes. Version 1
  *    and 2 manifests load exactly as before: no mode reads as "single", and
  *    boxes are absent everywhere outside a detect project.
@@ -205,6 +205,8 @@ export interface ProjectManifest {
   model: ModelMeta | null;
   /** Metadata of the head kept at model/head.prev.json, null when there is none. */
   checkpoint?: ModelMeta | null;
+  /** True when images, labels or boxes changed after the saved model was trained. */
+  modelStale?: boolean;
   settings: TrainSettings;
 }
 
@@ -242,6 +244,23 @@ export interface StoredDetector {
   ratios: number[];
   headWidth: number;
   weights: { shape: number[]; values: number[] }[];
+}
+
+/** A saved head may load only when its output contract matches the manifest metadata. */
+export function canRestoreModel(
+  manifest: ProjectManifest,
+  storedMode: ProjectMode,
+  storedLabelIds: string[],
+): boolean {
+  const meta = manifest.model;
+  if (!meta) return false;
+  const metaMode = meta.mode ?? "single";
+  return (
+    manifest.mode === storedMode &&
+    metaMode === storedMode &&
+    meta.labelIds.length === storedLabelIds.length &&
+    meta.labelIds.every((id, index) => id === storedLabelIds[index])
+  );
 }
 
 export const DEFAULT_SETTINGS: TrainSettings = {

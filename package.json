@@ -12,6 +12,7 @@
     "check:boxes": "node scripts/check-boxes.mjs",
     "check:detect": "node scripts/check-detect.mjs",
     "check:learning": "node scripts/check-learning.mjs",
+    "check:store": "node scripts/check-store.mjs",
     "icons": "node scripts/make-icon.mjs master && tauri icon src-tauri/app-icon.png --ios-color '#ffd83d' && node scripts/make-icon.mjs ios",
     "tauri": "tauri"
   },

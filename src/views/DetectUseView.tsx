@@ -89,6 +89,7 @@ export function DetectUseView() {
     useWebcam(live);
   const [liveDetections, setLiveDetections] = useState<Detection[]>([]);
   const [savingFrame, setSavingFrame] = useState(false);
+  const liveInferenceRef = useRef(false);
 
   const [stillUrl, setStillUrl] = useState<string | null>(null);
   const [stillSource, setStillSource] = useState<HTMLImageElement | null>(null);
@@ -112,20 +113,25 @@ export function DetectUseView() {
       return;
     }
     let cancelled = false;
-    let inFlight = false;
     const id = window.setInterval(() => {
-      if (inFlight) return;
+      if (liveInferenceRef.current) return;
       const video = videoRef.current;
       if (!video || video.videoWidth === 0) return;
-      inFlight = true;
-      const frame = toSquareCanvas(video);
+      liveInferenceRef.current = true;
+      let frame: HTMLCanvasElement;
+      try {
+        frame = toSquareCanvas(video);
+      } catch {
+        liveInferenceRef.current = false;
+        return;
+      }
       void detectObjects(frame, threshold)
         .then((detections) => {
           if (!cancelled) setLiveDetections(detections ?? []);
         })
         .catch(() => undefined)
         .finally(() => {
-          inFlight = false;
+          liveInferenceRef.current = false;
         });
     }, TICK_MS);
     return () => {
@@ -213,8 +219,8 @@ export function DetectUseView() {
     if (!video || video.videoWidth === 0 || savingFrame) return;
     setSavingFrame(true);
     try {
-      await addFromDrawable(toSquareCanvas(video), null, "capture");
-      toast("Frame saved. Open Label to draw its boxes.", "good");
+      const saved = await addFromDrawable(toSquareCanvas(video), null, "capture");
+      if (saved) toast("Frame saved. Open Label to draw its boxes.", "good");
     } finally {
       setSavingFrame(false);
     }

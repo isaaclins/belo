@@ -231,6 +231,20 @@ check(
     return boxes.every((_, b) => answered.has(b));
   })(),
 );
+check(
+  "nearby small boxes cannot overwrite each other's forced anchor",
+  (() => {
+    const boxes = [
+      { x: 0.1886881884, y: 0.5995697857, w: 0.0284250014, h: 0.0997248055 },
+      { x: 0.1325712843, y: 0.6965668716, w: 0.0552986691, h: 0.0471796872 },
+    ];
+    const nearby = matchAnchors(anchors, boxes);
+    const answered = new Set(
+      [...nearby.state].map((s, i) => (s === 1 ? nearby.truth[i] : -1)).filter((t) => t >= 0),
+    );
+    return answered.has(0) && answered.has(1);
+  })(),
+);
 
 // ---------- Targets ----------
 

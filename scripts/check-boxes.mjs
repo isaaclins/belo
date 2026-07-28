@@ -12,9 +12,15 @@
 const { advance, moved, positive, resized, HANDLES } = await import(
   new URL("../src/lib/boxes.ts", import.meta.url)
 );
-const { boxesOf, labelsOf, migrateManifest, normalizeRect, FORMAT_VERSION, MIN_BOX } = await import(
-  new URL("../src/lib/types.ts", import.meta.url)
-);
+const {
+  boxesOf,
+  canRestoreModel,
+  labelsOf,
+  migrateManifest,
+  normalizeRect,
+  FORMAT_VERSION,
+  MIN_BOX,
+} = await import(new URL("../src/lib/types.ts", import.meta.url));
 
 let failures = 0;
 const results = [];
@@ -193,6 +199,31 @@ check(
 check(
   "a picture with no boxes stays a background example",
   Array.isArray(m3.images[1].boxes) && m3.images[1].boxes.length === 0,
+);
+
+const detectMeta = {
+  trainedAt: "2026-01-02T00:00:00.000Z",
+  mode: "detect",
+  labelIds: ["lbl_a"],
+  epochs: 1,
+  accuracy: 1,
+  valAccuracy: null,
+  imageCount: 2,
+  settings,
+};
+const stale = migrateManifest({ ...v3, model: detectMeta, modelStale: true });
+check("a stale detector flag survives save and reopen", stale.modelStale === true);
+check(
+  "a stale detector with the same output order can still be restored with a warning",
+  canRestoreModel(stale, "detect", ["lbl_a"]),
+);
+check(
+  "a detector with a different label order cannot be restored",
+  !canRestoreModel(stale, "detect", ["lbl_b"]),
+);
+check(
+  "an orphan detector file cannot restore without manifest metadata",
+  !canRestoreModel(m3, "detect", ["lbl_a"]),
 );
 
 const rough = migrateManifest({

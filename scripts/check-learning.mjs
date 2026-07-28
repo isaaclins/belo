@@ -202,6 +202,64 @@ await tf.setBackend("wasm");
 await tf.ready();
 console.log(`backend ${tf.getBackend()}`);
 
+// Cancellation and thrown callbacks must not hand a partial detector back or
+// leave its variables alive. These tiny runs exercise both exits before the
+// longer learning proof starts.
+const datasetRandom = Math.random;
+Math.random = mulberry32(20260729);
+const lifecycleSample = {
+  imageId: "lifecycle",
+  features: new Float32Array(49 * 1024),
+  boxes: [],
+};
+const lifecycleSettings = {
+  epochs: 1,
+  batchSize: 1,
+  learningRate: 0.001,
+  hiddenUnits: 16,
+  validationSplit: 0,
+};
+const lifecycleTensors = tf.memory().numTensors;
+let cancelledCleanly = false;
+try {
+  await trainDetector({
+    samples: [lifecycleSample],
+    labelIds: ["lbl_test"],
+    settings: lifecycleSettings,
+    shouldStop: () => true,
+  });
+} catch (err) {
+  cancelledCleanly = err instanceof Error && err.message === "Training cancelled";
+}
+check("cancellation rejects instead of returning a partial detector", cancelledCleanly);
+check(
+  "cancellation disposes detector variables",
+  tf.memory().numTensors === lifecycleTensors,
+  `tensor delta ${tf.memory().numTensors - lifecycleTensors}`,
+);
+
+const callbackFailure = new Error("progress callback failed");
+let callbackPropagated = false;
+try {
+  await trainDetector({
+    samples: [lifecycleSample],
+    labelIds: ["lbl_test"],
+    settings: lifecycleSettings,
+    onProgress: () => {
+      throw callbackFailure;
+    },
+  });
+} catch (err) {
+  callbackPropagated = err === callbackFailure;
+}
+check("training errors propagate to the store", callbackPropagated);
+check(
+  "training errors dispose detector variables",
+  tf.memory().numTensors === lifecycleTensors,
+  `tensor delta ${tf.memory().numTensors - lifecycleTensors}`,
+);
+Math.random = datasetRandom;
+
 const full = await tf.loadLayersModel(fileHandler(MODEL_PATH));
 const extractor = tf.model({ inputs: full.inputs, outputs: full.getLayer("conv_pw_13_relu").output });
 
