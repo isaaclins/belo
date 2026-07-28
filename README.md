@@ -42,10 +42,9 @@ attention** is only a rough hint about which parts influenced an answer, not obj
 detection. Results also depend on your examples and camera quality, so varied, clear
 pictures usually work better.
 
-A **detect** project, where you draw a box around each object, can be labeled and trained
-today, and the Train view shows what it finds on your own pictures. Running one live on the
-camera arrives in a later update. Detection also reads a 7x7 grid over the picture, so an
-object much smaller than a seventh of the frame is hard for it to place.
+A **detect** project, where you draw a box around each object, can be labeled, trained and
+used on the live camera or one dropped image. Detection reads a 7x7 grid over the picture,
+so an object much smaller than a seventh of the frame is hard for it to place.
 
 ## FAQ
 
