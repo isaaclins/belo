@@ -263,6 +263,9 @@ Useful extras:
 - `npm run assets` refreshes the bundled TensorFlow.js WASM binaries.
 - `npm run check:camera` runs the camera seam against a mocked `MediaDevices`, which covers
   device switching, stale mobile ids and hot plug on a machine with a single webcam.
+- `npm run check:boxes` runs the detect mode box seam: drawing in every direction, moving
+  against the edges of the picture, all eight resize grips, and a save and reopen round
+  trip of version 1, 2 and 3 manifests.
 
 ### Layout
 
@@ -277,6 +280,7 @@ src/
   components/ThumbSizePicker.tsx   the four step image grid cell size control
   lib/
     attention.ts          overlay geometry and thresholding, pure functions
+    boxes.ts              detect mode box geometry, pure functions
     thumbSize.ts          grid cell size, remembered per machine
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
     capture.ts            CameraSource seam: the only module that calls getUserMedia

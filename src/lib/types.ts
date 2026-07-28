@@ -88,6 +88,9 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/** Rounding room at the far edge, so 0.6 + 0.4 still counts as inside. */
+const EDGE_SLACK = 1e-9;
+
 /**
  * Pulls a rectangle back inside the image and drops anything too small to be a
  * deliberate box. Used by the annotator on every commit and by the loader on
@@ -96,6 +99,20 @@ function clamp01(value: number): number {
 export function normalizeRect(rect: BoxRect): BoxRect | null {
   const numbers = [rect?.x, rect?.y, rect?.w, rect?.h];
   if (numbers.some((value) => typeof value !== "number" || !Number.isFinite(value))) return null;
+  // A box that is already well formed is handed back with its own numbers, so a
+  // save and a reopen give back exactly what was drawn instead of the same
+  // rectangle plus a little floating point arithmetic.
+  const inside =
+    rect.x >= 0 &&
+    rect.y >= 0 &&
+    rect.w > 0 &&
+    rect.h > 0 &&
+    rect.x + rect.w <= 1 + EDGE_SLACK &&
+    rect.y + rect.h <= 1 + EDGE_SLACK;
+  if (inside) {
+    if (rect.w < MIN_BOX || rect.h < MIN_BOX) return null;
+    return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+  }
   // A negative width is a rectangle dragged leftwards, not an error.
   const x0 = clamp01(Math.min(rect.x, rect.x + rect.w));
   const y0 = clamp01(Math.min(rect.y, rect.y + rect.h));
