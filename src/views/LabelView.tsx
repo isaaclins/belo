@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  BoundingBox,
   Camera,
   Check,
   FilePlus,
@@ -12,15 +13,44 @@ import {
   UploadSimple,
 } from "@phosphor-icons/react";
 import { useStore } from "../lib/store";
-import { EmptyState, Modal, swatch } from "../components/ui";
+import { EmptyState, Modal, swatch, swatchHex } from "../components/ui";
 import { ThumbSizePicker } from "../components/ThumbSizePicker";
 import { useThumbSize } from "../lib/thumbSize";
 import { filesFromDataTransfer } from "../lib/images";
 import { storage } from "../lib/storage";
 import { CaptureModal } from "./CaptureModal";
-import { hasLabel, labelsOf, type ImageRecord } from "../lib/types";
+import { BoxAnnotator } from "./BoxAnnotator";
+import { boxesOf, hasLabel, labelsOf, type ImageRecord, type Label } from "../lib/types";
 
 const UNLABELED = "__unlabeled__";
+
+/**
+ * Box outlines drawn straight onto a grid thumbnail, so progress is readable
+ * without opening anything. Stored pictures are always square and the cells are
+ * square too, so the picture fills the tile exactly and a plain 0..100 viewBox
+ * lands on the same place the annotator would.
+ */
+function BoxSketch({ image, labels }: { image: ImageRecord; labels: Label[] }) {
+  const boxes = boxesOf(image);
+  if (boxes.length === 0) return null;
+  return (
+    <svg className="tile__sketch" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      {boxes.map((box) => (
+        <rect
+          key={box.id}
+          x={box.x * 100}
+          y={box.y * 100}
+          width={box.w * 100}
+          height={box.h * 100}
+          fill="none"
+          stroke={swatchHex(labels.find((l) => l.id === box.labelId)?.color ?? 0)}
+          strokeWidth={2}
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+    </svg>
+  );
+}
 
 export function LabelView() {
   const manifest = useStore((s) => s.manifest);
@@ -44,32 +74,51 @@ export function LabelView() {
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [draft, setDraft] = useState("");
+  /** Detect mode: index into the shown grid of the picture being annotated. */
+  const [annotating, setAnnotating] = useState<number | null>(null);
 
   const thumb = useThumbSize();
 
   const labels = manifest?.labels ?? [];
   const images = manifest?.images ?? [];
   const multi = manifest?.mode === "multi";
+  const detect = manifest?.mode === "detect";
   const bucket = activeLabelId ?? UNLABELED;
   const activeLabel = labels.find((l) => l.id === activeLabelId) ?? null;
 
+  // A detect project has one bucket: every picture. The label rail there picks
+  // the pencil rather than a folder, because the labels sit on the boxes.
   const shown = useMemo<ImageRecord[]>(() => {
+    if (detect) return images.slice().reverse();
     const target = bucket === UNLABELED ? null : bucket;
     return images
       .filter((img) => (target === null ? labelsOf(img).length === 0 : hasLabel(img, target)))
       .slice()
       .reverse();
-  }, [images, bucket]);
+  }, [images, bucket, detect]);
+
+  // The annotator walks the same list the grid shows, so a deletion behind it
+  // must not leave it pointing past the end.
+  useEffect(() => {
+    if (annotating !== null && annotating >= shown.length) {
+      setAnnotating(shown.length === 0 ? null : shown.length - 1);
+    }
+  }, [annotating, shown.length]);
 
   const unlabeledCount = images.filter((img) => labelsOf(img).length === 0).length;
-  const countFor = (id: string) => images.filter((img) => hasLabel(img, id)).length;
+  const countFor = (id: string) =>
+    detect
+      ? images.reduce((sum, img) => sum + boxesOf(img).filter((box) => box.labelId === id).length, 0)
+      : images.filter((img) => hasLabel(img, id)).length;
   const sharedWith = (id: string) =>
     selection.filter((imageId) => {
       const image = images.find((img) => img.id === imageId);
       return image ? hasLabel(image, id) : false;
     }).length;
 
-  const targetLabelId = bucket === UNLABELED ? null : bucket;
+  // Pictures arrive unlabeled in a detect project: what they hold is decided by
+  // the boxes drawn on them afterwards.
+  const targetLabelId = detect || bucket === UNLABELED ? null : bucket;
   const soleCount = activeLabel
     ? images.filter((img) => hasLabel(img, activeLabel.id) && labelsOf(img).length === 1).length
     : 0;
@@ -123,7 +172,7 @@ export function LabelView() {
     <div className="label">
       <aside className="rail">
         <div className="rail__head">
-          <span className="eyebrow">Labels</span>
+          <span className="eyebrow">{detect ? "Pencils" : "Labels"}</span>
           <button className="iconbtn" onClick={onNewLabel} title="Add a label" aria-label="Add a label">
             <Plus size={16} weight="bold" />
           </button>
@@ -146,20 +195,22 @@ export function LabelView() {
               </button>
             </li>
           ))}
-          <li>
-            <button
-              className={`railitem${bucket === UNLABELED ? " railitem--on" : ""}`}
-              onClick={() => {
-                setActiveLabel(null);
-                setSelection([]);
-                setRenaming(false);
-              }}
-            >
-              <span className="dot dot--empty" />
-              <span className="railitem__name">Unlabeled</span>
-              <span className="railitem__count mono">{unlabeledCount}</span>
-            </button>
-          </li>
+          {detect ? null : (
+            <li>
+              <button
+                className={`railitem${bucket === UNLABELED ? " railitem--on" : ""}`}
+                onClick={() => {
+                  setActiveLabel(null);
+                  setSelection([]);
+                  setRenaming(false);
+                }}
+              >
+                <span className="dot dot--empty" />
+                <span className="railitem__name">Unlabeled</span>
+                <span className="railitem__count mono">{unlabeledCount}</span>
+              </button>
+            </li>
+          )}
         </ul>
 
         <div className="rail__foot mono">
@@ -187,8 +238,13 @@ export function LabelView() {
                 {activeLabel ? (
                   <span className="pane__swatch" style={{ background: swatch(activeLabel.color) }} />
                 ) : null}
-                <h2>{activeLabel ? activeLabel.name : "Unlabeled"}</h2>
+                <h2>{detect ? "All pictures" : activeLabel ? activeLabel.name : "Unlabeled"}</h2>
                 <span className="badge badge--idle">{shown.length}</span>
+                {detect ? (
+                  <span className="pane__pencil">
+                    {activeLabel ? `drawing with ${activeLabel.name}` : "add a label to draw with"}
+                  </span>
+                ) : null}
                 {activeLabel ? (
                   <button
                     className="iconbtn"
@@ -218,8 +274,8 @@ export function LabelView() {
             ) : null}
             <button
               className="btn btn--sm btn--primary"
-              disabled={!activeLabel}
-              title={activeLabel ? "Capture from the webcam" : "Pick a label first"}
+              disabled={!activeLabel && !detect}
+              title={activeLabel || detect ? "Capture from the webcam" : "Pick a label first"}
               onClick={() => setCapturing(true)}
             >
               <Camera size={16} weight="bold" /> Capture
@@ -227,8 +283,10 @@ export function LabelView() {
             {activeLabel ? (
               <button
                 className="iconbtn iconbtn--danger"
-                title="Delete this label and its images"
-                aria-label="Delete this label and its images"
+                title={detect ? "Delete this label and its boxes" : "Delete this label and its images"}
+                aria-label={
+                  detect ? "Delete this label and its boxes" : "Delete this label and its images"
+                }
                 onClick={() => setConfirmDelete(true)}
               >
                 <Trash size={16} weight="bold" />
@@ -237,7 +295,32 @@ export function LabelView() {
           </div>
         </header>
 
-        {selection.length > 0 ? (
+        {selection.length > 0 && detect ? (
+          <div className="seltools">
+            <span className="eyebrow">{selection.length} selected</span>
+            {/* No move and no label chips here: in a detect project a label
+                belongs to a box, not to a whole picture. */}
+            <span className="seltools__note">
+              Labels live on the boxes you draw, so there is nothing to move a picture into. Open a
+              picture to box what is inside it.
+            </span>
+            <div className="spacer" />
+            <button
+              className="btn btn--sm btn--danger"
+              onClick={() => {
+                void removeImages(selection);
+                setSelection([]);
+              }}
+            >
+              <Trash size={15} weight="bold" /> Delete
+            </button>
+            <button className="btn btn--sm" onClick={() => setSelection([])}>
+              Clear
+            </button>
+          </div>
+        ) : null}
+
+        {selection.length > 0 && !detect ? (
           <div className="seltools">
             <span className="eyebrow">{selection.length} selected</span>
             <span className="seltools__label">{multi ? "Labels" : "Move to"}</span>
@@ -314,11 +397,21 @@ export function LabelView() {
         >
           {shown.length === 0 ? (
             <EmptyState
-              icon={bucket === UNLABELED ? <Question size={30} weight="bold" /> : <Images size={30} weight="bold" />}
+              icon={
+                detect ? (
+                  <BoundingBox size={30} weight="bold" />
+                ) : bucket === UNLABELED ? (
+                  <Question size={30} weight="bold" />
+                ) : (
+                  <Images size={30} weight="bold" />
+                )
+              }
               title={labels.length === 0 ? "Add a label first" : "Drop images here"}
               text={
                 labels.length === 0
-                  ? "Labels are the classes your model learns. Two or more, with about 30 images each, is a good start."
+                  ? detect
+                    ? "Labels are the things Belo should find. Add one per kind of object, then draw a box around every one you see."
+                    : "Labels are the classes your model learns. Two or more, with about 30 images each, is a good start."
                   : storage.mobile
                     ? "Choose photos from this device, or hold the capture button to grab a burst from the camera."
                     : "Drag in files or whole folders, import from disk, or hold the capture button to grab a burst from your webcam."
@@ -341,15 +434,11 @@ export function LabelView() {
               className="grid scroll"
               style={{ "--cell": `${thumb}px` } as React.CSSProperties}
             >
-              {shown.map((image) => {
+              {shown.map((image, position) => {
                 const on = selection.includes(image.id);
-                return (
-                  <button
-                    key={image.id}
-                    className={`tile${on ? " tile--on" : ""}`}
-                    onClick={(event) => toggle(image.id, event.metaKey || event.ctrlKey || event.shiftKey)}
-                    aria-pressed={on}
-                  >
+                const boxes = boxesOf(image);
+                const face = (
+                  <>
                     <img
                       src={storage.imageUrl(path, image.file)}
                       alt=""
@@ -357,11 +446,7 @@ export function LabelView() {
                       decoding="async"
                       draggable={false}
                     />
-                    {on ? (
-                      <span className="tile__check">
-                        <Check size={14} weight="bold" />
-                      </span>
-                    ) : null}
+                    {detect ? <BoxSketch image={image} labels={labels} /> : null}
                     {image.source === "capture" ? <span className="tile__tag">cam</span> : null}
                     {image.source === "feedback" ? <span className="tile__tag">fix</span> : null}
                     {multi && labelsOf(image).length > 1 ? (
@@ -378,6 +463,53 @@ export function LabelView() {
                         ))}
                       </span>
                     ) : null}
+                  </>
+                );
+
+                // Detect mode: the tile itself opens the annotator, so picking
+                // pictures for deletion moves onto its own corner control.
+                if (detect) {
+                  return (
+                    <div key={image.id} className={`tile tile--open${on ? " tile--on" : ""}`}>
+                      <button
+                        className="tile__face"
+                        title="Draw boxes on this picture"
+                        aria-label={`Draw boxes on picture ${position + 1}`}
+                        onClick={() => setAnnotating(position)}
+                      >
+                        {face}
+                      </button>
+                      <button
+                        className={`tile__pick${on ? " tile__pick--on" : ""}`}
+                        aria-pressed={on}
+                        title={on ? "Deselect this picture" : "Select this picture"}
+                        aria-label={on ? "Deselect this picture" : "Select this picture"}
+                        onClick={() => toggle(image.id, true)}
+                      >
+                        <Check size={14} weight="bold" />
+                      </button>
+                      <span
+                        className={`tile__boxcount mono${boxes.length === 0 ? " tile__boxcount--none" : ""}`}
+                      >
+                        {boxes.length === 0 ? "none" : `${boxes.length} box${boxes.length === 1 ? "" : "es"}`}
+                      </span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <button
+                    key={image.id}
+                    className={`tile${on ? " tile--on" : ""}`}
+                    onClick={(event) => toggle(image.id, event.metaKey || event.ctrlKey || event.shiftKey)}
+                    aria-pressed={on}
+                  >
+                    {face}
+                    {on ? (
+                      <span className="tile__check">
+                        <Check size={14} weight="bold" />
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}
@@ -387,8 +519,20 @@ export function LabelView() {
         </div>
       </section>
 
-      {capturing && activeLabel ? (
-        <CaptureModal label={activeLabel} onClose={() => setCapturing(false)} />
+      {annotating !== null && shown[annotating] ? (
+        <BoxAnnotator
+          images={shown}
+          index={annotating}
+          onIndex={setAnnotating}
+          onClose={() => setAnnotating(null)}
+        />
+      ) : null}
+
+      {capturing && (activeLabel || detect) ? (
+        <CaptureModal
+          label={detect ? null : activeLabel}
+          onClose={() => setCapturing(false)}
+        />
       ) : null}
 
       {confirmDelete && activeLabel ? (
@@ -413,7 +557,13 @@ export function LabelView() {
             </>
           }
         >
-          {multi ? (
+          {detect ? (
+            <p>
+              This removes the label and the {countFor(activeLabel.id)} box
+              {countFor(activeLabel.id) === 1 ? "" : "es"} drawn with it. Your pictures all stay
+              where they are. It cannot be undone.
+            </p>
+          ) : multi ? (
             <p>
               This removes the label from {countFor(activeLabel.id)} image
               {countFor(activeLabel.id) === 1 ? "" : "s"} and deletes the {soleCount} that carry no

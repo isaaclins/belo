@@ -17,6 +17,11 @@ const MODES: { id: ProjectMode; title: string; text: string }[] = [
     title: "Many labels per image",
     text: "An image can be X and Y but not Z. Each label gets its own yes or no.",
   },
+  {
+    id: "detect",
+    title: "Find and box each object",
+    text: "You draw a rectangle around every thing you care about, so one picture can hold several of them in different places.",
+  },
 ];
 
 function relativeTime(iso: string): string {

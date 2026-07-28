@@ -5,14 +5,18 @@ import { create } from "zustand";
 import type * as tfTypes from "@tensorflow/tfjs";
 import { storage, type ImportRef } from "./storage";
 import {
+  boxesOf,
   hasLabel,
   labelsOf,
   makeId,
   migrateManifest,
   MULTI_THRESHOLD,
   newManifest,
+  normalizeRect,
   SWATCH_COUNT,
   withLabels,
+  type BoxRect,
+  type BoxRecord,
   type ImageRecord,
   type ImageSource,
   type Label,
@@ -168,6 +172,14 @@ interface State {
   /** Multi mode: adds the label where it is missing, removes it where it is not. */
   toggleImageLabels: (imageIds: string[], labelId: string) => void;
   removeImages: (imageIds: string[]) => Promise<void>;
+
+  /** Detect mode: draws one box on an image and returns its id. */
+  addBox: (imageId: string, labelId: string, rect: BoxRect) => string | null;
+  /** Detect mode: moves or resizes one box. A degenerate rectangle is ignored. */
+  updateBox: (imageId: string, boxId: string, rect: BoxRect) => void;
+  /** Detect mode: retags one box, for when it was drawn with the wrong label. */
+  setBoxLabel: (imageId: string, boxId: string, labelId: string) => void;
+  removeBox: (imageId: string, boxId: string) => void;
 
   updateSettings: (patch: Partial<TrainSettings>) => void;
   startTraining: () => Promise<void>;
@@ -361,6 +373,9 @@ export const useStore = create<State>((set, get) => {
     const path = get().path;
     if (!manifest || !path) return;
     const auto = run.mode === "auto";
+    // Detect projects train a detection head, which is not built yet. Nothing
+    // here can read boxes, so the classifier path never runs on them.
+    if (manifest.mode === "detect") return;
     const { labelIds, samples } = trainingSet(manifest);
 
     if (labelIds.length < 2) {
@@ -559,7 +574,10 @@ export const useStore = create<State>((set, get) => {
       source: origin,
       addedAt: new Date().toISOString(),
     };
-    return withLabels(record, ids, mode);
+    const labelled = withLabels(record, ids, mode);
+    // A fresh detect image starts as a background example: it exists, it has no
+    // boxes yet, and that is a valid state rather than a missing one.
+    return mode === "detect" ? { ...labelled, boxes: [] } : labelled;
   };
 
   return {
@@ -787,10 +805,13 @@ export const useStore = create<State>((set, get) => {
       const { manifest, path } = get();
       if (!manifest || !path) return;
       // In multi mode an image can survive losing one of its labels, so only
-      // the ones left with nothing are deleted from the bundle.
-      const doomed = manifest.images.filter(
-        (img) => hasLabel(img, id) && labelsOf(img).length === 1,
-      );
+      // the ones left with nothing are deleted from the bundle. In detect mode
+      // no image belongs to a label at all, so every picture is kept and only
+      // the boxes drawn with this label go.
+      const doomed =
+        manifest.mode === "detect"
+          ? []
+          : manifest.images.filter((img) => hasLabel(img, id) && labelsOf(img).length === 1);
       try {
         if (doomed.length > 0) await storage.deleteImages(path, doomed.map((img) => img.file));
       } catch (err) {
@@ -803,11 +824,15 @@ export const useStore = create<State>((set, get) => {
         labels,
         images: manifest.images
           .filter((img) => !gone.has(img.id))
-          .map((img) =>
-            hasLabel(img, id)
+          .map((img) => {
+            if (manifest.mode === "detect") {
+              const kept = boxesOf(img).filter((box) => box.labelId !== id);
+              return kept.length === boxesOf(img).length ? img : { ...img, boxes: kept };
+            }
+            return hasLabel(img, id)
               ? withLabels(img, labelsOf(img).filter((labelId) => labelId !== id), manifest.mode)
-              : img,
-          ),
+              : img;
+          }),
         model: null,
       });
       dropModel();
@@ -816,6 +841,68 @@ export const useStore = create<State>((set, get) => {
 
     setActiveLabel(id) {
       set({ activeLabelId: id });
+    },
+
+    addBox(imageId, labelId, rect) {
+      const manifest = get().manifest;
+      if (!manifest || manifest.mode !== "detect") return null;
+      const clean = normalizeRect(rect);
+      if (!clean) return null;
+      const box: BoxRecord = { id: makeId("box"), labelId, ...clean };
+      touch({
+        images: manifest.images.map((img) =>
+          img.id === imageId ? { ...img, boxes: [...boxesOf(img), box] } : img,
+        ),
+      });
+      markStale();
+      return box.id;
+    },
+
+    updateBox(imageId, boxId, rect) {
+      const manifest = get().manifest;
+      if (!manifest || manifest.mode !== "detect") return;
+      const clean = normalizeRect(rect);
+      if (!clean) return;
+      touch({
+        images: manifest.images.map((img) =>
+          img.id === imageId
+            ? {
+                ...img,
+                boxes: boxesOf(img).map((box) => (box.id === boxId ? { ...box, ...clean } : box)),
+              }
+            : img,
+        ),
+      });
+      markStale();
+    },
+
+    setBoxLabel(imageId, boxId, labelId) {
+      const manifest = get().manifest;
+      if (!manifest || manifest.mode !== "detect") return;
+      touch({
+        images: manifest.images.map((img) =>
+          img.id === imageId
+            ? {
+                ...img,
+                boxes: boxesOf(img).map((box) => (box.id === boxId ? { ...box, labelId } : box)),
+              }
+            : img,
+        ),
+      });
+      markStale();
+    },
+
+    removeBox(imageId, boxId) {
+      const manifest = get().manifest;
+      if (!manifest || manifest.mode !== "detect") return;
+      touch({
+        images: manifest.images.map((img) =>
+          img.id === imageId
+            ? { ...img, boxes: boxesOf(img).filter((box) => box.id !== boxId) }
+            : img,
+        ),
+      });
+      markStale();
     },
 
     async addFiles(files, labelId) {

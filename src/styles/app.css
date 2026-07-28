@@ -1203,6 +1203,391 @@
   }
 }
 
+/* ---------- Detect: grid tiles ---------- */
+/* The tile becomes a container in detect mode: one button opens the annotator,
+   a second one in the corner picks the picture for deletion. */
+.tile--open {
+  display: block;
+}
+
+.tile__face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* Box outlines over the thumbnail. Never a pointer target: the tile under it
+   owns the click. */
+.tile__sketch {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.tile__pick {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--ink);
+  background: var(--panel);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.tile__pick--on {
+  background: var(--accent-2);
+  color: #fff;
+}
+
+.tile__boxcount {
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  padding: 1px 5px;
+  background: var(--accent);
+  border: 2px solid var(--ink);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.tile__boxcount--none {
+  background: var(--paper-deep);
+  color: var(--ink-soft);
+}
+
+.pane__pencil {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  background: var(--paper-deep);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+}
+
+.seltools__note {
+  font-size: 12px;
+  color: var(--ink-soft);
+  max-width: 62ch;
+}
+
+/* ---------- Detect: annotator ---------- */
+.anno {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--paper);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.anno__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4);
+  background: var(--panel);
+  border-bottom: var(--border-w) solid var(--ink);
+  padding-top: calc(var(--s2) + env(safe-area-inset-top));
+}
+
+.anno__mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  background: var(--accent);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+}
+
+.anno__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 290px);
+  min-height: 0;
+}
+
+.anno__stage {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--s4);
+  background: repeating-linear-gradient(45deg, var(--paper-deep) 0 6px, var(--paper) 6px 12px);
+}
+
+/* Sized in JS from the picture's own ratio, so the box layer sits on the
+   picture to the pixel. touch-action none is what lets a finger draw instead of
+   scrolling the page under it. */
+.anno__frame {
+  position: relative;
+  border: var(--border-w) solid var(--ink);
+  box-shadow: var(--shadow);
+  background: var(--ink);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: crosshair;
+}
+
+.anno__frame--draw {
+  outline: 3px dashed var(--accent-2);
+  outline-offset: 3px;
+}
+
+.anno__img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+.abox {
+  position: absolute;
+  border: 3px solid var(--ink);
+  background: transparent;
+  cursor: move;
+  touch-action: none;
+}
+
+.abox--on {
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
+.abox--draft {
+  border-style: dashed;
+  pointer-events: none;
+}
+
+.abox--tiny {
+  border-color: var(--ink-soft);
+}
+
+.abox__tag {
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  transform: translateY(-100%);
+  max-width: 180px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 1px 6px;
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  font-family: var(--font-display);
+  font-size: 11px;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.abox__kill {
+  position: absolute;
+  top: -13px;
+  right: -13px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--danger);
+  color: #fff;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.abox__grip {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--panel);
+  border: 2px solid var(--ink);
+  touch-action: none;
+}
+
+/* A finger needs a 44 point target, which a 14 pixel grip is not. The hit area
+   grows invisibly around it instead of making the box furniture bigger. */
+.abox__grip::after {
+  content: "";
+  position: absolute;
+  inset: -15px;
+}
+
+@media (pointer: coarse) {
+  .abox__grip::after {
+    inset: -18px;
+  }
+
+  .abox__kill {
+    width: 30px;
+    height: 30px;
+    top: -16px;
+    right: -16px;
+  }
+}
+
+.abox__grip--nw {
+  top: -8px;
+  left: -8px;
+  cursor: nwse-resize;
+}
+.abox__grip--n {
+  top: -8px;
+  left: calc(50% - 7px);
+  cursor: ns-resize;
+}
+.abox__grip--ne {
+  top: -8px;
+  right: -8px;
+  cursor: nesw-resize;
+}
+.abox__grip--e {
+  top: calc(50% - 7px);
+  right: -8px;
+  cursor: ew-resize;
+}
+.abox__grip--se {
+  bottom: -8px;
+  right: -8px;
+  cursor: nwse-resize;
+}
+.abox__grip--s {
+  bottom: -8px;
+  left: calc(50% - 7px);
+  cursor: ns-resize;
+}
+.abox__grip--sw {
+  bottom: -8px;
+  left: -8px;
+  cursor: nesw-resize;
+}
+.abox__grip--w {
+  top: calc(50% - 7px);
+  left: -8px;
+  cursor: ew-resize;
+}
+
+.anno__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--s4);
+  background: var(--panel);
+  border-left: var(--border-w) solid var(--ink);
+}
+
+.anno__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.anno__labels {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+.anno__keys {
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* ---------- Detect: train and use placeholder ---------- */
+.soon {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s6) var(--s5);
+}
+
+.soon__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s3);
+  width: min(560px, 100%);
+  padding: var(--s5);
+  background: var(--panel);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+.soon__mark {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  background: var(--accent);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.soon__title {
+  font-family: var(--font-display);
+  font-size: clamp(1.3rem, 3.4vw, 1.9rem);
+  line-height: 1.05;
+}
+
+.soon__text {
+  line-height: 1.5;
+}
+
+.soon__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s2);
+  width: 100%;
+  margin: 0;
+}
+
+.soon__stats > div {
+  padding: var(--s2) var(--s3);
+  background: var(--paper);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+}
+
+.soon__stats dd {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
 /* ---------- Phone layout ---------- */
 @media (max-width: 700px) {
   /* No project means no bottom tab bar, so only the home inset is reserved. */
@@ -1467,6 +1852,59 @@
   .tile__check {
     width: 28px;
     height: 28px;
+  }
+
+  .tile__pick {
+    width: 30px;
+    height: 30px;
+  }
+
+  /* Two rows on a phone: picture over controls, with the picture keeping the
+     space it needs to be drawn on. */
+  .anno__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .anno__stage {
+    padding: var(--s3);
+  }
+
+  .anno__side {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--s3);
+    max-height: 42vh;
+    padding: var(--s3);
+    border-left: 0;
+    border-top: var(--border-w) solid var(--ink);
+  }
+
+  .anno__block {
+    flex: 1 1 46%;
+    min-width: 150px;
+  }
+
+  .anno__labels {
+    max-height: 24vh;
+  }
+
+  .anno__bar {
+    gap: var(--s2);
+    padding: var(--s2) var(--s3);
+    padding-top: calc(var(--s2) + env(safe-area-inset-top));
+  }
+
+  .anno__bar .eyebrow {
+    font-size: 10px;
+  }
+
+  .soon {
+    padding: var(--s4) var(--s3);
+  }
+
+  .soon__panel {
+    padding: var(--s4);
   }
 
   .capture {

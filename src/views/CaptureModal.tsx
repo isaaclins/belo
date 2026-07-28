@@ -11,7 +11,11 @@ import type { Label } from "../lib/types";
 
 const STRIP_SIZE = 14;
 
-export function CaptureModal({ label, onClose }: { label: Label; onClose: () => void }) {
+/**
+ * A null label means a detect project: frames arrive whole and are boxed
+ * afterwards, so there is no label to capture them into.
+ */
+export function CaptureModal({ label, onClose }: { label: Label | null; onClose: () => void }) {
   const addFromDrawable = useStore((s) => s.addFromDrawable);
   const { videoRef, status, error, cameras, deviceId, selectCamera, switching, retry } = useWebcam(true);
   const [count, setCount] = useState(0);
@@ -29,12 +33,12 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
     if (inFlight.current >= MAX_IN_FLIGHT) return;
     const canvas = toSquareCanvas(video);
     inFlight.current += 1;
-    void addFromDrawable(canvas, label.id, "capture").finally(() => {
+    void addFromDrawable(canvas, label?.id ?? null, "capture").finally(() => {
       inFlight.current -= 1;
     });
     setCount((n) => n + 1);
     setStrip((prev) => [canvas.toDataURL("image/jpeg", 0.6), ...prev].slice(0, STRIP_SIZE));
-  }, [addFromDrawable, label.id, videoRef]);
+  }, [addFromDrawable, label?.id, videoRef]);
 
   const startBurst = useCallback(() => {
     if (timer.current) return;
@@ -71,7 +75,7 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
 
   return (
     <Modal
-      title={`Capture into ${label.name}`}
+      title={label ? `Capture into ${label.name}` : "Capture pictures"}
       wide
       onClose={() => {
         stopBurst();
@@ -113,9 +117,13 @@ export function CaptureModal({ label, onClose }: { label: Label; onClose: () => 
               )}
             </div>
           ) : null}
-          <span className="capture__target" style={{ background: swatch(label.color) }}>
-            {label.name}
-          </span>
+          {label ? (
+            <span className="capture__target" style={{ background: swatch(label.color) }}>
+              {label.name}
+            </span>
+          ) : (
+            <span className="capture__target capture__target--plain">Box these afterwards</span>
+          )}
         </div>
 
         <div className="capture__controls">

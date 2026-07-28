@@ -7,6 +7,7 @@ import { HomeView } from "./views/HomeView";
 import { LabelView } from "./views/LabelView";
 import { TrainView } from "./views/TrainView";
 import { UseView } from "./views/UseView";
+import { DetectSoonView } from "./views/DetectSoonView";
 
 const TABS: { id: View; label: string; index: string }[] = [
   { id: "label", label: "Label", index: "01" },
@@ -48,17 +49,16 @@ function SaveState() {
 /** Shows which classification mode the open project was created with. */
 function ModeBadge() {
   const mode = useStore((s) => s.manifest?.mode ?? "single");
+  const title =
+    mode === "multi"
+      ? "Multi label project: every label gets its own yes or no"
+      : mode === "detect"
+        ? "Detect project: labels live on the boxes you draw"
+        : "Single label project: one winning label per image";
   return (
-    <span
-      className="badge badge--idle topbar__mode"
-      title={
-        mode === "multi"
-          ? "Multi label project: every label gets its own yes or no"
-          : "Single label project: one winning label per image"
-      }
-    >
-      {mode === "multi" ? "multi" : "single"}
-      <span className="topbar__mode-word"> label</span>
+    <span className="badge badge--idle topbar__mode" title={title}>
+      {mode}
+      <span className="topbar__mode-word"> {mode === "detect" ? "boxes" : "label"}</span>
     </span>
   );
 }
@@ -128,6 +128,7 @@ export default function App() {
   const closeProject = useStore((s) => s.closeProject);
   const hasModel = useStore((s) => s.hasModel);
   const images = manifest?.images.length ?? 0;
+  const detect = manifest?.mode === "detect";
 
   useEffect(() => {
     void boot();
@@ -178,7 +179,7 @@ export default function App() {
             <div className="spacer" />
             <nav className="tabs" aria-label="Project stages">
               {TABS.map((tab) => {
-                const blocked = tab.id === "use" && !hasModel;
+                const blocked = tab.id === "use" && !hasModel && !detect;
                 return (
                   <button
                     key={tab.id}
@@ -216,7 +217,15 @@ export default function App() {
         ) : view === "label" ? (
           <LabelView />
         ) : view === "train" ? (
-          <TrainView />
+          // Mode guard: a detect project has no classifier to train or run yet,
+          // so both stages show the placeholder until the detection head lands.
+          detect ? (
+            <DetectSoonView stage="train" />
+          ) : (
+            <TrainView />
+          )
+        ) : detect ? (
+          <DetectSoonView stage="use" />
         ) : (
           <UseView />
         )}

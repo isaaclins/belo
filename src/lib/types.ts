@@ -7,20 +7,27 @@ export const IMAGE_SIZE = 224;
  * 2: adds project mode and, in multi mode, labelIds per image. Version 1
  *    manifests load unchanged and are written back as version 2 on the next
  *    save, with mode "single", which is exactly their old behavior.
+ * 3: adds the detect mode and, in that mode only, per image boxes. Version 1
+ *    and 2 manifests load exactly as before: no mode reads as "single", and
+ *    boxes are absent everywhere outside a detect project.
  */
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
 export const SWATCH_COUNT = 8;
 
 /** Score above which a label counts as present in multi mode. */
 export const MULTI_THRESHOLD = 0.5;
+
+/** Smallest edge a box may keep, as a share of the image. Below this it is a stray tap. */
+export const MIN_BOX = 0.02;
 
 export type ImageSource = "import" | "capture" | "feedback";
 
 /**
  * single: softmax over the labels, exactly one winner per image.
  * multi:  one sigmoid per label, so an image can be "X and Y but not Z".
+ * detect: labels live on drawn boxes rather than on whole images.
  */
-export type ProjectMode = "single" | "multi";
+export type ProjectMode = "single" | "multi" | "detect";
 
 export interface Label {
   id: string;
@@ -30,6 +37,23 @@ export interface Label {
   createdAt: string;
 }
 
+/**
+ * One drawn rectangle in a detect project. Coordinates are normalized 0..1
+ * against the stored image, and x/y is the top left corner, so a box survives
+ * any display size the annotator or a later training pass renders it at.
+ */
+export interface BoxRecord {
+  id: string;
+  labelId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** The part of a box the annotator drags around. */
+export type BoxRect = Pick<BoxRecord, "x" | "y" | "w" | "h">;
+
 export interface ImageRecord {
   id: string;
   /** File name inside the bundle images/ directory. */
@@ -38,8 +62,49 @@ export interface ImageRecord {
   labelId: string | null;
   /** Multi mode label set. Absent in single mode projects. */
   labelIds?: string[];
+  /**
+   * Detect mode boxes. Absent in single and multi projects. An empty list is a
+   * meaningful value: the image is a background example with nothing to find.
+   */
+  boxes?: BoxRecord[];
   source: ImageSource;
   addedAt: string;
+}
+
+export function boxesOf(image: ImageRecord): BoxRecord[] {
+  return image.boxes ?? [];
+}
+
+/** Every label drawn on an image, each one once, in drawing order. */
+export function boxLabelsOf(image: ImageRecord): string[] {
+  const seen: string[] = [];
+  for (const box of boxesOf(image)) {
+    if (!seen.includes(box.labelId)) seen.push(box.labelId);
+  }
+  return seen;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * Pulls a rectangle back inside the image and drops anything too small to be a
+ * deliberate box. Used by the annotator on every commit and by the loader on
+ * every manifest read, so nothing out of range can reach the rest of the app.
+ */
+export function normalizeRect(rect: BoxRect): BoxRect | null {
+  const numbers = [rect?.x, rect?.y, rect?.w, rect?.h];
+  if (numbers.some((value) => typeof value !== "number" || !Number.isFinite(value))) return null;
+  // A negative width is a rectangle dragged leftwards, not an error.
+  const x0 = clamp01(Math.min(rect.x, rect.x + rect.w));
+  const y0 = clamp01(Math.min(rect.y, rect.y + rect.h));
+  const x1 = clamp01(Math.max(rect.x, rect.x + rect.w));
+  const y1 = clamp01(Math.max(rect.y, rect.y + rect.h));
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w < MIN_BOX || h < MIN_BOX) return null;
+  return { x: x0, y: y0, w, h };
 }
 
 /** Every label on an image, whichever mode the project uses. */
@@ -54,11 +119,29 @@ export function hasLabel(image: ImageRecord, labelId: string): boolean {
 
 /** Rebuilds an image record around a label set, keeping both fields in step. */
 export function withLabels(image: ImageRecord, labelIds: string[], mode: ProjectMode): ImageRecord {
-  if (mode === "single") {
-    const { labelIds: _drop, ...rest } = image;
-    return { ...rest, labelId: labelIds[0] ?? null };
+  if (mode === "multi") return { ...image, labelId: labelIds[0] ?? null, labelIds };
+  const { labelIds: _drop, ...rest } = image;
+  return { ...rest, labelId: labelIds[0] ?? null };
+}
+
+/**
+ * Keeps the boxes field where it belongs: present and sanitized in a detect
+ * project, absent everywhere else, so a single or multi manifest is written
+ * back byte for byte the way it was before detect mode existed.
+ */
+export function withBoxes(image: ImageRecord, mode: ProjectMode): ImageRecord {
+  if (mode !== "detect") {
+    if (!("boxes" in image)) return image;
+    const { boxes: _drop, ...rest } = image;
+    return rest;
   }
-  return { ...image, labelId: labelIds[0] ?? null, labelIds };
+  const boxes: BoxRecord[] = [];
+  for (const box of boxesOf(image)) {
+    const rect = normalizeRect(box);
+    if (!rect || typeof box.labelId !== "string" || !box.labelId) continue;
+    boxes.push({ id: box.id, labelId: box.labelId, ...rect });
+  }
+  return { ...image, boxes };
 }
 
 export interface TrainSettings {
@@ -152,9 +235,11 @@ export function newManifest(
  * Brings a manifest read from disk up to the current schema. The only defaults
  * that matter are mode "single" and, in multi mode, a label set derived from the
  * old single labelId, so a version 1 project behaves exactly as it did before.
+ * Detect projects additionally get their boxes clamped back into the image.
  */
 export function migrateManifest(raw: ProjectManifest): ProjectManifest {
-  const mode: ProjectMode = raw.mode === "multi" ? "multi" : "single";
+  const mode: ProjectMode =
+    raw.mode === "multi" ? "multi" : raw.mode === "detect" ? "detect" : "single";
   return {
     ...raw,
     formatVersion: FORMAT_VERSION,
@@ -162,7 +247,9 @@ export function migrateManifest(raw: ProjectManifest): ProjectManifest {
     checkpoint: raw.checkpoint ?? null,
     settings: { ...DEFAULT_SETTINGS, ...raw.settings },
     labels: raw.labels ?? [],
-    images: (raw.images ?? []).map((image) => withLabels(image, labelsOf(image), mode)),
+    images: (raw.images ?? []).map((image) =>
+      withBoxes(withLabels(image, labelsOf(image), mode), mode),
+    ),
   };
 }
 
