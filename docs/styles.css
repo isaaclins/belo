@@ -666,14 +666,15 @@ img, svg { display: block; max-width: 100%; }
   padding: clamp(64px, 9vw, 112px) var(--gutter);
 }
 
-.get__head { margin-bottom: clamp(32px, 4vw, 52px); max-width: 22ch; }
-.get__head h2 { max-width: 18ch; }
+/* The headline is short now, so the block is wide enough to hold two lines. */
+.get__head { margin-bottom: clamp(32px, 4vw, 52px); max-width: 34ch; }
+.get__head h2 { max-width: 34ch; }
 
 .get__grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .card {

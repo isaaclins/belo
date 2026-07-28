@@ -3,22 +3,22 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Belo, a local image classifier you train yourself</title>
-<meta name="description" content="Belo trains an image classifier on your own pictures, on your own machine. Label, train, then classify live from the camera. No account, no upload, no network calls at runtime." />
+<title>Belo, teach your computer to recognize things</title>
+<meta name="description" content="Show Belo a few pictures. It learns to recognize them, then names what your camera sees. No account, no upload, and it works offline." />
 <meta name="theme-color" content="#f4efe4" />
 <meta name="color-scheme" content="light" />
 <link rel="icon" href="mark.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="mark.svg" />
 <meta property="og:type" content="website" />
-<meta property="og:title" content="Belo, a local image classifier you train yourself" />
-<meta property="og:description" content="Label your own pictures, train a classifier in seconds, then use it live from the camera. Everything runs on the device." />
+<meta property="og:title" content="Belo, teach your computer to recognize things" />
+<meta property="og:description" content="Name your things, add pictures, press Train. Belo then tells you what the camera sees. Everything runs on your device." />
 <meta property="og:url" content="https://isaaclins.github.io/belo/" />
 <meta property="og:image" content="https://isaaclins.github.io/belo/mark.svg" />
 <meta name="twitter:card" content="summary" />
 <!-- The custom domain sits behind a CDN that holds static assets for four
      hours, so the stylesheet and the script carry a version query. Bump it
      whenever either file changes. -->
-<link rel="stylesheet" href="styles.css?v=2" />
+<link rel="stylesheet" href="styles.css?v=3" />
 </head>
 <body>
 
@@ -44,7 +44,7 @@
   <a class="brand" href="#top">
     <svg class="brand__mark" width="30" height="30" aria-hidden="true"><use href="#mark-on-ink" /></svg>
     <span class="brand__name">Belo</span>
-    <span class="brand__sub">local image classifier</span>
+    <span class="brand__sub">learns from your pictures</span>
   </a>
   <nav class="topnav" aria-label="Sections">
     <a href="#flow">Flow</a>
@@ -61,7 +61,7 @@
     <div class="hero__copy">
       <p class="chip">v0.4.3 &middot; desktop and iOS</p>
       <h1>Teach your machine <em>to&nbsp;see</em>.</h1>
-      <p class="lead">Belo trains an image classifier on your own pictures, on your own machine. No account, no upload, no network calls.</p>
+      <p class="lead">Show Belo a few pictures of a thing. It learns to spot it. Nothing leaves your device.</p>
       <div class="cta-row">
         <a class="btn btn--primary" href="#get">Get Belo</a>
         <a class="btn" href="#flow">See how it works</a>
@@ -71,7 +71,7 @@
     <figure class="hero__shot">
       <!-- Mock of the Use view. Hand drawn in the app's own style, not a screenshot. -->
       <div class="shot">
-        <svg viewBox="0 0 560 392" role="img" aria-label="Mockup of the Belo Use view: a live camera panel with an attention overlay next to confidence bars for three labels.">
+        <svg viewBox="0 0 560 392" role="img" aria-label="Drawing of Belo's Use screen: a live camera picture with a highlight overlay, next to three labels and how sure Belo is about each one.">
           <rect width="560" height="392" fill="#fffdf8" />
 
           <!-- top bar -->
@@ -150,17 +150,17 @@
           <text class="t-mono" x="16" y="360" font-size="10" fill="#4a4650">44 IMAGES &middot; 3 LABELS &middot; SINGLE LABEL</text>
         </svg>
       </div>
-      <figcaption>The Use view, redrawn for this page. Belo never ships your pictures anywhere, so the screenshots here are drawings, not frames from someone's camera.</figcaption>
+      <figcaption>A drawing, not a screenshot. Belo never sends your pictures anywhere.</figcaption>
     </figure>
   </section>
 
   <!-- ================= FACT BAND ================= -->
   <section class="band" aria-label="What Belo is">
     <ul class="band__list">
-      <li><b>0</b><span>network calls at runtime. The MobileNet weights ship inside the app.</span></li>
-      <li><b>224</b><span>pixels square. Every image is center cropped and normalized on import.</span></li>
-      <li><b>7&times;7</b><span>feature cells behind the attention overlay, roughly 32 pixels each.</span></li>
-      <li><b>MIT</b><span>licensed, and the .belo bundle is a folder you can open.</span></li>
+      <li><b>0</b><span>trips to the internet. Belo works offline.</span></li>
+      <li><b>224</b><span>pixels square. Every picture is trimmed to fit.</span></li>
+      <li><b>49</b><span>small patches. Belo checks the picture patch by patch.</span></li>
+      <li><b>MIT</b><span>licensed. A project is a folder you can open.</span></li>
     </ul>
   </section>
 
@@ -168,7 +168,7 @@
   <section class="section" id="flow">
     <div class="section__head">
       <h2>Three tabs.<br />One loop.</h2>
-      <p>Label your pictures, train a head in seconds, then point a camera at the world. Every correction you make in the Use view goes back into the dataset and quietly retrains.</p>
+      <p>Name things, add pictures, press Train. Then point a camera at the world.</p>
     </div>
 
     <ol class="flow">
@@ -176,7 +176,7 @@
         <span class="flow__idx">01</span>
         <h3>Label</h3>
         <div class="flow__art">
-          <svg viewBox="0 0 260 150" role="img" aria-label="Mockup of the Label view: a label rail and a grid of image cells.">
+          <svg viewBox="0 0 260 150" role="img" aria-label="Drawing of the Label screen: a row of label names above a grid of pictures.">
             <rect width="260" height="150" fill="#fffdf8" stroke="#111014" stroke-width="3" />
             <rect x="0" y="0" width="260" height="26" fill="#111014" />
             <rect x="10" y="7" width="46" height="13" fill="#ffd83d" stroke="#111014" stroke-width="2" />
@@ -199,16 +199,16 @@
             <rect x="72" y="38" width="52" height="46" fill="none" stroke="#ff5c8a" stroke-width="3" />
           </svg>
         </div>
-        <p>Drag in single files or whole folders, import from disk, or hold the capture button for a webcam burst. Selections move between labels, four cell sizes change how many fit per row, and portrait frames are letterboxed rather than cropped.</p>
+        <p>Drag in pictures or whole folders, or hold the button for a webcam burst.</p>
       </li>
 
       <li class="flow__card flow__card--b">
         <span class="flow__idx">02</span>
         <h3>Train</h3>
         <div class="flow__art">
-          <svg viewBox="0 0 260 150" role="img" aria-label="Mockup of the Train view: a progress meter with accuracy and holdout readouts.">
+          <svg viewBox="0 0 260 150" role="img" aria-label="Drawing of the Train screen: a progress bar with scores for pictures Belo studied and pictures it had not seen.">
             <rect width="260" height="150" fill="#fffdf8" stroke="#111014" stroke-width="3" />
-            <text class="t-mono" x="14" y="26" font-size="9" fill="#4a4650">EPOCH 31 / 40</text>
+            <text class="t-mono" x="14" y="26" font-size="9" fill="#4a4650">ROUND 31 / 40</text>
             <rect x="14" y="34" width="232" height="18" fill="#f4efe4" stroke="#111014" stroke-width="3" />
             <rect x="14" y="34" width="180" height="18" fill="#2f6bff" />
             <rect x="14" y="34" width="232" height="18" fill="none" stroke="#111014" stroke-width="3" />
@@ -219,7 +219,7 @@
             </g>
             <text class="t-mono" x="20" y="78" font-size="7" fill="#111014">ACCURACY</text>
             <text class="t-dis" x="20" y="99" font-size="17" fill="#111014">1.00</text>
-            <text class="t-mono" x="100" y="78" font-size="7" fill="#4a4650">HOLDOUT</text>
+            <text class="t-mono" x="100" y="78" font-size="7" fill="#4a4650">UNSEEN</text>
             <text class="t-dis" x="100" y="99" font-size="17" fill="#111014">0.94</text>
             <text class="t-mono" x="180" y="78" font-size="7" fill="#4a4650">IMAGES</text>
             <text class="t-dis" x="180" y="99" font-size="17" fill="#111014">44</text>
@@ -229,14 +229,14 @@
             <text class="t-mono" x="182" y="130" font-size="8" fill="#111014">MOVE TO</text>
           </svg>
         </div>
-        <p>One click trains the dense head and reports live progress, training accuracy, a holdout score and a score per label. Every image is scored afterwards, so the ones the model still reads wrong are sitting right there, one click from being fixed.</p>
+        <p>One click. Belo scores itself on pictures it never studied, and lists what it got wrong.</p>
       </li>
 
       <li class="flow__card flow__card--c">
         <span class="flow__idx">03</span>
         <h3>Use</h3>
         <div class="flow__art">
-          <svg viewBox="0 0 260 150" role="img" aria-label="Mockup of the Use view: a live camera tile with teach buttons underneath.">
+          <svg viewBox="0 0 260 150" role="img" aria-label="Drawing of the Use screen: a live camera picture with teach buttons underneath.">
             <rect width="260" height="150" fill="#fffdf8" stroke="#111014" stroke-width="3" />
             <rect x="12" y="12" width="150" height="98" fill="#17161c" stroke="#111014" stroke-width="3" />
             <circle cx="62" cy="60" r="26" fill="#ffd83d" stroke="#111014" stroke-width="5" />
@@ -264,7 +264,7 @@
             <text class="t-mono" x="197" y="134" font-size="7" fill="#111014">RATE 8 FPS</text>
           </svg>
         </div>
-        <p>Point the webcam at something and watch the live call and its confidence, or drop in one image for a single verdict. Confirm or correct it and that frame joins the dataset, with a debounced retrain about four seconds after your last tap.</p>
+        <p>Point the camera. Belo says what it sees and how sure it is. Correct it and it learns again.</p>
       </li>
     </ol>
   </section>
@@ -273,7 +273,7 @@
   <section class="camera" id="camera" data-attention="on">
     <div class="camera__art">
       <div class="shot shot--flush">
-        <svg viewBox="0 0 420 320" role="img" aria-label="Mockup of the attention overlay: a seven by seven grid of tinted cells over a camera frame, with one box per label.">
+        <svg viewBox="0 0 420 320" role="img" aria-label="Drawing of the highlight overlay: a grid of 49 tinted patches over a camera picture, with one box per label.">
           <rect width="420" height="320" fill="#17161c" />
           <circle cx="150" cy="150" r="76" fill="#ffd83d" stroke="#111014" stroke-width="9" />
           <rect x="256" y="176" width="104" height="104" fill="#3a3844" stroke="#111014" stroke-width="7" />
@@ -358,13 +358,13 @@
 
     <div class="camera__copy">
       <p class="chip chip--pink">Live camera</p>
-      <h2>Attention, not detection.</h2>
-      <p class="lead">Turn the overlay on and Belo paints where the evidence for the current call sits: a tinted heat map plus one box per label.</p>
-      <p>It reads the classifier's own 7 by 7 feature grid, so it is a coarse hint at roughly 32 pixel resolution. It is never an object detector, and Belo does not pretend otherwise. The toggle starts off and is remembered until the app closes, never inside the project.</p>
+      <h2>It shows you where it looked.</h2>
+      <p class="lead">Flip on Show attention and Belo tints the parts of the picture that swayed its answer.</p>
+      <p>A rough hint, not a box around an object. Belo sees 49 chunky patches, nothing finer.</p>
       <ul class="ticks">
-        <li>A camera picker appears as soon as the machine exposes more than one video input, and swaps the stream in place.</li>
-        <li>Phones hand out device ids that go stale, so a refused id retries on facing mode. Front and back switching stays reliable.</li>
-        <li>The live camera keeps classifying with the current model while a background retrain runs.</li>
+        <li>Two cameras? A picker swaps the view instantly.</li>
+        <li>Front and back switching works on phones.</li>
+        <li>The camera keeps working while Belo retrains.</li>
       </ul>
     </div>
   </section>
@@ -372,12 +372,12 @@
   <!-- ================= MODES AND TEACHING ================= -->
   <section class="section bento" aria-label="Modes and teaching">
     <article class="tile tile--wide">
-      <h3>Two output shapes, picked once</h3>
-      <p>The mode is chosen when the project is created and shown in the project header. Single label runs a softmax and reports one winner with a confidence. Multi label runs one sigmoid per label with a fixed 0.5 threshold, so a picture can be one thing and another thing but not a third.</p>
+      <h3>One answer, or many</h3>
+      <p>Pick once, at the start. One answer: Belo names the best match. Many answers: each label gets its own yes or no.</p>
       <div class="modeshot">
-        <svg viewBox="0 0 300 150" role="img" aria-label="Mockup of multi label output: three labels each with an independent yes or no and a confidence.">
+        <svg viewBox="0 0 300 150" role="img" aria-label="Drawing of the many answers mode: three labels, each with its own yes or no and a score.">
           <rect width="300" height="150" fill="#fffdf8" stroke="#111014" stroke-width="3" />
-          <text class="t-mono" x="14" y="24" font-size="9" fill="#4a4650">MULTI LABEL &middot; THRESHOLD 0.50</text>
+          <text class="t-mono" x="14" y="24" font-size="9" fill="#4a4650">MANY ANSWERS &middot; YES ABOVE 0.50</text>
           <g stroke="#111014" stroke-width="3">
             <rect x="14" y="36" width="272" height="30" fill="#ffd83d" />
             <rect x="14" y="74" width="272" height="30" fill="#fffdf8" />
@@ -396,43 +396,43 @@
           </g>
         </svg>
       </div>
-      <p class="fineprint">Mock values. Images with no labels are ignored by training in both modes.</p>
+      <p class="fineprint">Made up numbers. Pictures with no label sit training out.</p>
     </article>
 
     <article class="tile tile--hold">
       <h3>Hold to teach</h3>
-      <p>Tap a teach button and Belo learns one frame. Hold it and frames keep coming until you let go, counting up on the button, capped at 60 per hold. Try it.</p>
+      <p>Tap to teach one picture. Hold and they keep coming, up to 60. Try it.</p>
       <button class="teach" type="button" data-teach>
         <span class="teach__label">This is Circle</span>
         <span class="teach__count" data-teach-count>0</span>
       </button>
-      <p class="fineprint">The rate control picks 2, 4, 8 or 12 frames per second and drives the Label view burst too, so the app has one capture speed. Frames are dropped rather than queued if the disk cannot keep up.</p>
+      <p class="fineprint">2 to 12 pictures a second, your pick. If the disk falls behind, pictures get dropped.</p>
     </article>
   </section>
 
   <!-- ================= MODEL ================= -->
   <section class="model" aria-label="How the model works">
-    <h2>A frozen trunk and a small head</h2>
+    <h2>Borrowed eyes, a small brain of your own</h2>
     <div class="model__grid">
       <div class="model__item">
-        <p class="model__k">Trunk</p>
-        <p class="model__v">MobileNet v1, 1.0, 224</p>
-        <p>Truncated at conv_pw_13_relu and spatially averaged into a 1024 value embedding per image. The weights are bundled with the app, so nothing is fetched. The same pass hands back the 7x7x1024 activation the overlay scores cell by cell.</p>
+        <p class="model__k">Eyes</p>
+        <p class="model__v">MobileNet v1, 224 pixels</p>
+        <p>A ready made picture reader, built in. It turns pictures into clues, and never phones home.</p>
       </div>
       <div class="model__item">
-        <p class="model__k">Head</p>
-        <p class="model__v">Dense, 100 hidden units, Adam</p>
-        <p>Only this part learns, which is why a run takes seconds instead of hours. Softmax in single label projects, one sigmoid per label in multi label projects, serialized to model/head.json when the run finishes.</p>
+        <p class="model__k">Brain</p>
+        <p class="model__v">100 units, seconds per run</p>
+        <p>The only part that learns your labels. That is why training takes seconds, not hours.</p>
       </div>
       <div class="model__item">
-        <p class="model__k">Runtime</p>
-        <p class="model__v">TensorFlow.js, WebGL then WASM</p>
-        <p>WebGL is picked first and WASM is the fallback when it is unavailable. The WASM binaries are copied in at build time. There is no inference server, no API key and nothing to sign up for.</p>
+        <p class="model__k">Engine</p>
+        <p class="model__v">TensorFlow.js, graphics card first</p>
+        <p>Graphics card if possible, processor if not. No server, no API key, no sign up.</p>
       </div>
       <div class="model__item">
-        <p class="model__k">Safety net</p>
-        <p class="model__v">One checkpoint, one undo</p>
-        <p>Before each automatic retrain the current head is copied to head.prev.json. Revert to previous model puts it back. Manual runs write no checkpoint, so the action always means undo what the app did on its own.</p>
+        <p class="model__k">Undo</p>
+        <p class="model__v">One spare copy, one button</p>
+        <p>Belo copies the old model before retraining itself. One button brings it back.</p>
       </div>
     </div>
   </section>
@@ -441,24 +441,24 @@
   <section class="section projects" id="projects">
     <div class="projects__copy">
       <h2>A project is a folder you can open</h2>
-      <p class="lead">Every project is a directory bundle named Project.belo. It behaves the same on macOS, Windows and Linux, and normal tools can inspect, diff and back it up.</p>
-      <p>Saves are incremental: only the manifest is rewritten on an edit, and it goes to a temp file and gets renamed, so a crash cannot leave you with half a file. Model export is out of scope for this version.</p>
+      <p class="lead">A plain folder named Project.belo. Same on Mac, Windows and Linux. Open it, copy it, back it up.</p>
+      <p>Belo writes a temp file and renames it, so a crash cannot leave half a file. No model export yet.</p>
       <ul class="ticks">
-        <li>project.json carries the labels, the image records, the training settings and the model metadata.</li>
-        <li>Deleting a project asks first and names what goes with it. The Rust side refuses to delete anything that is not a .belo directory holding a project.json.</li>
-        <li>On iOS the bundles live in the app's sandboxed Documents folder, so they move between devices through a container backup for now.</li>
+        <li>One small file holds labels, pictures and settings.</li>
+        <li>Deleting asks first, and only ever touches real projects.</li>
+        <li>On iPhone, moving projects means a device backup for now.</li>
       </ul>
     </div>
-    <div class="tree" role="img" aria-label="Directory layout of a .belo bundle">
+    <div class="tree" role="img" aria-label="What is inside a Belo project folder">
 <pre><code><b>Shapes.belo/</b>
-  project.json      <i>manifest: labels, images, settings, model</i>
+  project.json      <i>your labels, pictures and settings</i>
   images/
-    img_a1f.jpg     <i>one normalized 224x224 JPEG per record</i>
+    img_a1f.jpg     <i>one picture, trimmed to 224x224</i>
     img_b73.jpg
     img_c02.jpg
   model/
-    head.json       <i>serialized dense head weights</i>
-    head.prev.json  <i>checkpoint the revert button restores</i></code></pre>
+    head.json       <i>what Belo learned</i>
+    head.prev.json  <i>the older copy, for undo</i></code></pre>
     </div>
   </section>
 
@@ -466,13 +466,13 @@
   <section class="get" id="get">
     <div class="get__head">
       <p class="chip">Get it</p>
-      <h2>Two ways in, both honest about where they are.</h2>
+      <h2>Two ways in.<br />Both honest.</h2>
     </div>
 
     <div class="get__grid">
       <article class="card card--build">
         <h3>Desktop, built from source</h3>
-        <p>There are no signed installers yet, so the real path today is to clone the repo and build it yourself. You need Node 20 or newer, Rust 1.77 or newer, and the Tauri 2 system dependencies for your platform.</p>
+        <p>No installers yet. You clone the repo and build it yourself. Needs Node 20, Rust 1.77 and Tauri 2.</p>
         <div class="code">
           <pre><code id="clone-cmd">git clone https://github.com/isaaclins/belo.git
 cd belo
@@ -485,7 +485,7 @@ npm run tauri build</code></pre>
           <li>Windows</li>
           <li>Linux</li>
         </ul>
-        <p class="fineprint">Windows runs through WebView2, Linux through WebKitGTK, where camera support depends on the installed build and is the least tested of the three.</p>
+        <p class="fineprint">On Linux the camera depends on your system, and it is the least tested.</p>
         <a class="btn btn--primary" href="https://github.com/isaaclins/belo">Open the repo on GitHub</a>
       </article>
 
@@ -498,8 +498,8 @@ npm run tauri build</code></pre>
             <i>Coming soon, pending Apple review</i>
           </span>
         </div>
-        <p>The iOS build exists and runs: sandboxed project bundles, the native photo picker, bottom stage tabs and 44 point touch targets. The developer license approval is in progress, so there is no listing to link yet.</p>
-        <p class="fineprint">Minimum iOS 15.0. The simulator has no camera, so Belo shows a clear message there and takes photo import as the test path instead. Android is code complete but has not been built on an Android toolchain yet.</p>
+        <p>The iPhone build works today. Apple is still reviewing the developer license, so there is nothing to link yet.</p>
+        <p class="fineprint">Needs iOS 15. The simulator has no camera, so you add photos instead. Android is written but not built.</p>
       </article>
     </div>
   </section>
@@ -510,7 +510,7 @@ npm run tauri build</code></pre>
     <svg width="34" height="34" aria-hidden="true"><use href="#mark-on-ink" /></svg>
     <span>Belo</span>
   </div>
-  <p class="footer__line">An app for training image classifiers on your own pictures. Everything runs on the device.</p>
+  <p class="footer__line">Teach your computer to recognize things, using your own pictures. All on your device.</p>
   <nav class="footer__links" aria-label="Links">
     <a href="https://github.com/isaaclins/belo">GitHub</a>
     <a href="https://github.com/isaaclins/belo/blob/main/README.md">Docs</a>
