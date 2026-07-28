@@ -440,6 +440,25 @@ export function detect(
   return decodeDetections(scores, offsets, detector.anchors, detector.labelIds, options);
 }
 
+/**
+ * Use-view seam from one MobileNet spatial map to drawable boxes. Keeping this
+ * named path outside React lets the node learning proof exercise the same
+ * validation, head pass and decoding that live and single-image inference use.
+ * The caller still owns a tensor and must dispose it after this returns.
+ */
+export function detectSpatialMap(
+  detector: Detector,
+  cells: Float32Array | tf.Tensor2D,
+  options: DecodeOptions = {},
+): Detection[] {
+  const expected = detector.rows * detector.cols * FEATURE_SIZE;
+  const actual = cells instanceof Float32Array ? cells.length : cells.size;
+  if (actual !== expected) {
+    throw new Error(`Detector expected ${expected} spatial values, got ${actual}`);
+  }
+  return detect(detector, cells, options);
+}
+
 export function serializeDetector(detector: Detector): StoredDetector {
   return {
     formatVersion: 1,

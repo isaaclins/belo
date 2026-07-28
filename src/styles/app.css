@@ -1068,6 +1068,42 @@
   pointer-events: none;
 }
 
+.use__detections {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.detectbox {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid;
+}
+
+.detectbox__tag {
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: -3px;
+  max-width: max(100%, 150px);
+  padding: 2px 5px;
+  overflow: hidden;
+  border: 2px solid var(--ink);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 10px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.detectbox__tag--inside {
+  top: 2px;
+  bottom: auto;
+  left: 2px;
+}
+
 .use__drop {
   position: relative;
   display: grid;
@@ -1173,6 +1209,109 @@
 .score__val {
   font-size: 12px;
   text-align: right;
+}
+
+.threshold {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.threshold legend {
+  float: left;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.threshold__steps {
+  display: flex;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: 2px 2px 0 var(--ink);
+  overflow: hidden;
+}
+
+.threshold__step {
+  min-width: 34px;
+  min-height: 26px;
+  padding: 2px 5px;
+  background: var(--panel);
+  border: 0;
+  border-right: 2px solid var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.threshold__step:last-child {
+  border-right: 0;
+}
+
+.threshold__step--on {
+  background: var(--accent);
+}
+
+.threshold__step:focus-visible {
+  position: relative;
+  outline: 3px solid var(--accent-2);
+  outline-offset: -3px;
+}
+
+.detectionlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.detectionlist li {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s2);
+  padding-bottom: var(--s2);
+  border-bottom: 2px dashed var(--ink);
+}
+
+.detectionlist li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.detectionlist__name {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detectionlist__score {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detectsave {
+  display: grid;
+  gap: var(--s2);
+  padding-top: var(--s3);
+  border-top: var(--border-w-thin) dashed var(--ink);
+}
+
+.detectsave .btn {
+  justify-self: start;
+}
+
+.detectsave p {
+  margin: 0;
 }
 
 .feedback {

@@ -40,19 +40,28 @@ export interface Size {
  * Returning it in container pixels lets the canvas sit at inset 0 and still
  * line the 7x7 grid up with what the camera shows.
  */
-export function cropSquare(container: Size, video: Size): Rect | null {
+function fittedSquare(container: Size, source: Size, fit: "cover" | "contain"): Rect | null {
   const { width: cw, height: ch } = container;
-  const { width: vw, height: vh } = video;
-  if (cw <= 0 || ch <= 0 || vw <= 0 || vh <= 0) return null;
-  const scale = Math.max(cw / vw, ch / vh);
-  const offsetX = (cw - vw * scale) / 2;
-  const offsetY = (ch - vh * scale) / 2;
-  const side = Math.min(vw, vh);
+  const { width: sw, height: sh } = source;
+  if (cw <= 0 || ch <= 0 || sw <= 0 || sh <= 0) return null;
+  const scale = fit === "cover" ? Math.max(cw / sw, ch / sh) : Math.min(cw / sw, ch / sh);
+  const offsetX = (cw - sw * scale) / 2;
+  const offsetY = (ch - sh * scale) / 2;
+  const side = Math.min(sw, sh);
   return {
-    x: offsetX + ((vw - side) / 2) * scale,
-    y: offsetY + ((vh - side) / 2) * scale,
+    x: offsetX + ((sw - side) / 2) * scale,
+    y: offsetY + ((sh - side) / 2) * scale,
     size: side * scale,
   };
+}
+
+export function cropSquare(container: Size, video: Size): Rect | null {
+  return fittedSquare(container, video, "cover");
+}
+
+/** The model's center square inside an object-fit: contain single image. */
+export function containSquare(container: Size, image: Size): Rect | null {
+  return fittedSquare(container, image, "contain");
 }
 
 export interface Range {

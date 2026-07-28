@@ -42,6 +42,7 @@ import { iou, matchDetections, type Detection, type LabeledRect } from "./detect
 import {
   deserializeDetector,
   detect,
+  detectSpatialMap,
   serializeDetector,
   trainDetector,
   type DetectEpoch,
@@ -240,6 +241,8 @@ interface State {
   setAttentionOn: (on: boolean) => void;
   /** Asking for attention adds one batched head pass over the same features. */
   predict: (source: Drawable, wantAttention?: boolean) => Promise<Prediction | null>;
+  /** Detect mode: one spatial embedding, one head pass, then decoded boxes. */
+  detectObjects: (source: Drawable, scoreThreshold?: number) => Promise<Detection[] | null>;
 }
 
 // Non reactive side tables. Keeping tensors and typed arrays out of the store
@@ -1492,6 +1495,18 @@ export const useStore = create<State>((set, get) => {
 
     setAttentionOn(on) {
       set({ attentionOn: on });
+    },
+
+    async detectObjects(source, scoreThreshold) {
+      const manifest = get().manifest;
+      if (!manifest || manifest.mode !== "detect" || !detector) return null;
+      const { spatial } = await embedWithSpatial(source, true);
+      if (!spatial) return null;
+      try {
+        return detectSpatialMap(detector, spatial.cells, { scoreThreshold });
+      } finally {
+        spatial.cells.dispose();
+      }
     },
 
     async predict(source, wantAttention = false) {

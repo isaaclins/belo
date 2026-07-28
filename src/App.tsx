@@ -7,8 +7,8 @@ import { HomeView } from "./views/HomeView";
 import { LabelView } from "./views/LabelView";
 import { TrainView } from "./views/TrainView";
 import { UseView } from "./views/UseView";
-import { DetectSoonView } from "./views/DetectSoonView";
 import { DetectTrainView } from "./views/DetectTrainView";
+import { DetectUseView } from "./views/DetectUseView";
 
 const TABS: { id: View; label: string; index: string }[] = [
   { id: "label", label: "Label", index: "01" },
@@ -218,16 +218,15 @@ export default function App() {
         ) : view === "label" ? (
           <LabelView />
         ) : view === "train" ? (
-          // Mode guard: a detect project trains a detection head on its boxes,
-          // which is a different view. Live detection is still to come, so the
-          // Use stage keeps the placeholder.
+          // Detect projects train and use their spatial head in dedicated
+          // views. The classifier's single and multi paths stay shared.
           detect ? (
             <DetectTrainView />
           ) : (
             <TrainView />
           )
         ) : detect ? (
-          <DetectSoonView />
+          <DetectUseView />
         ) : (
           <UseView />
         )}
