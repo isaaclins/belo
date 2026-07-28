@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "check:camera": "node scripts/check-camera-seam.mjs",
     "check:boxes": "node scripts/check-boxes.mjs",
+    "check:detect": "node scripts/check-detect.mjs",
+    "check:learning": "node scripts/check-learning.mjs",
     "icons": "node scripts/make-icon.mjs master && tauri icon src-tauri/app-icon.png --ios-color '#ffd83d' && node scripts/make-icon.mjs ios",
     "tauri": "tauri"
   },

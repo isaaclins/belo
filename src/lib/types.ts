@@ -20,6 +20,13 @@ export const MULTI_THRESHOLD = 0.5;
 /** Smallest edge a box may keep, as a share of the image. Below this it is a stray tap. */
 export const MIN_BOX = 0.02;
 
+/**
+ * Pictures with at least one box needed before a detect project can train. A
+ * detection head has to learn where as well as what, and under ten examples it
+ * only learns the few places the boxes happened to be.
+ */
+export const DETECT_MIN_IMAGES = 10;
+
 export type ImageSource = "import" | "capture" | "feedback";
 
 /**
@@ -178,6 +185,10 @@ export interface ModelMeta {
   valAccuracy: number | null;
   imageCount: number;
   settings: TrainSettings;
+  /** Detect projects only: how the last run scored at IoU 0.5. */
+  precision?: number;
+  recall?: number;
+  boxCount?: number;
 }
 
 export interface ProjectManifest {
@@ -218,6 +229,21 @@ export interface StoredHead {
   weights: { shape: number[]; values: number[] }[];
 }
 
+/** Serialized detection head, stored at model/detect.json inside the bundle. */
+export interface StoredDetector {
+  formatVersion: number;
+  labelIds: string[];
+  featureSize: number;
+  /** Feature grid the head was built for, 7x7 for a 224 pixel input. */
+  rows: number;
+  cols: number;
+  /** Anchor set, so a head keeps working if the defaults ever move. */
+  scales: number[];
+  ratios: number[];
+  headWidth: number;
+  weights: { shape: number[]; values: number[] }[];
+}
+
 export const DEFAULT_SETTINGS: TrainSettings = {
   epochs: 40,
   batchSize: 16,
@@ -225,6 +251,25 @@ export const DEFAULT_SETTINGS: TrainSettings = {
   hiddenUnits: 100,
   validationSplit: 0.15,
 };
+
+/**
+ * Detect projects start from different numbers. A detection head sees a few
+ * hundred anchors per picture instead of one embedding, and almost all of them
+ * are background, so it needs many more passes over a smaller batch before the
+ * scores mean anything. These are the settings the learning proof in
+ * scripts/check-learning.mjs is measured with.
+ */
+export const DETECT_SETTINGS: TrainSettings = {
+  epochs: 150,
+  batchSize: 8,
+  learningRate: 0.002,
+  hiddenUnits: 96,
+  validationSplit: 0.2,
+};
+
+export function defaultSettings(mode: ProjectMode): TrainSettings {
+  return mode === "detect" ? { ...DETECT_SETTINGS } : { ...DEFAULT_SETTINGS };
+}
 
 export function newManifest(
   name: string,
@@ -244,7 +289,7 @@ export function newManifest(
     images: [],
     model: null,
     checkpoint: null,
-    settings: { ...DEFAULT_SETTINGS },
+    settings: defaultSettings(mode),
   };
 }
 
@@ -262,7 +307,7 @@ export function migrateManifest(raw: ProjectManifest): ProjectManifest {
     formatVersion: FORMAT_VERSION,
     mode,
     checkpoint: raw.checkpoint ?? null,
-    settings: { ...DEFAULT_SETTINGS, ...raw.settings },
+    settings: { ...defaultSettings(mode), ...raw.settings },
     labels: raw.labels ?? [],
     images: (raw.images ?? []).map((image) =>
       withBoxes(withLabels(image, labelsOf(image), mode), mode),
