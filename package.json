@@ -9,7 +9,7 @@
     "assets": "node scripts/copy-wasm.mjs",
     "typecheck": "tsc --noEmit",
     "check:camera": "node scripts/check-camera-seam.mjs",
-    "icons": "node scripts/make-icon.mjs master && tauri icon src-tauri/app-icon.png --ios-color #ffd83d && node scripts/make-icon.mjs ios",
+    "icons": "node scripts/make-icon.mjs master && tauri icon src-tauri/app-icon.png --ios-color '#ffd83d' && node scripts/make-icon.mjs ios",
     "tauri": "tauri"
   },
   "repository": {

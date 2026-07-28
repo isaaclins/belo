@@ -4,3 +4,4 @@ dist/
 src-tauri/target/
 src-tauri/gen/schemas/
 public/tfjs-wasm/
+src-tauri/icons/android/
