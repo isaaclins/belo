@@ -1,7 +1,7 @@
 # Belo
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-ffd83d?style=flat-square&labelColor=171717)](#license)
-![Platforms: desktop and iPhone](https://img.shields.io/badge/platforms-desktop%20%7C%20Mobile-f473b9?style=flat-square&labelColor=171717)
+![Platforms: desktop and iPhone](https://img.shields.io/badge/platforms-Desktop%20%7C%20Mobile-f473b9?style=flat-square&labelColor=171717)
 
 Teach your computer to recognize things using your own pictures. Belo keeps every
 picture and project on your device. There is no account, no upload, and no internet
