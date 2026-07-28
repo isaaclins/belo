@@ -1,8 +1,14 @@
-// Rasterizes the canonical Belo mark.
+// Rasterizes the canonical Belo mark for the platform icon sets.
 //
 //   node scripts/make-icon.mjs master   src-tauri/app-icon.png, the 1024 master
 //   node scripts/make-icon.mjs ios      the iOS AppIcon.appiconset images
 //   node scripts/make-icon.mjs          both
+//
+// Platform icons drop the ink frame. The in-app mark keeps it, because there it
+// sits on a page and needs an edge; a launcher icon is already framed by the
+// system, and on iOS the rounded mask cut the black band into muddy dark
+// corners. So the icons are drawn frameless: yellow edge to edge, with the ring
+// and the chip scaled up slightly to fill the space the frame used to take.
 //
 // `npx tauri icon src-tauri/app-icon.png` turns the master into the desktop and
 // Windows sets, but it writes iOS images with an alpha channel and Apple
@@ -12,8 +18,8 @@
 //
 // The numbers below are the same 512 unit grid as src/assets/logo.svg and
 // src/components/BeloMark.tsx. There is no SVG rasterizer dependency on
-// purpose: the mark is four flat shapes, so drawing them directly keeps the
-// repo dependency free and keeps the raster identical to the vector.
+// purpose: the mark is a handful of flat shapes, so drawing them directly keeps
+// the repo dependency free and keeps the raster in step with the vector.
 import { deflateSync } from "node:zlib";
 import { writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -26,17 +32,29 @@ const INK = [17, 16, 20]; // --ink
 const YELLOW = [255, 216, 61]; // --accent
 const PINK = [255, 92, 138]; // --accent-3
 
-// Frame: rect 20,20,472,472 stroked 40 centered, so the band is 0..40 / 472..512.
-const FRAME = 40;
 // Lens: circle at 216,216 r 116 stroked 64 centered, so the annulus is 84..148.
 const LENS = { cx: 216, cy: 216, inner: 84, outer: 148 };
 // Chip: rect 302,302,132,132 stroked 20 centered, so outer 292..444, inner 312..424.
 const CHIP = { outer: [292, 444], inner: [312, 424] };
 
-/** Color of the mark at one point in design grid units. */
-function sample(x, y) {
-  if (x < FRAME || y < FRAME || x > GRID - FRAME || y > GRID - FRAME) return INK;
+// Frameless growth. The framed mark's contents span 68..444, so 68 of margin on
+// every side. Scaling about the grid centre by this factor leaves about 53, a
+// tenth of the grid, which reads full without pushing the chip's outer corner
+// into the iOS rounded mask.
+const ICON_SCALE = 1.08;
 
+/**
+ * Color of the icon at one point in design grid units: the same ring and chip
+ * as the in-app mark, scaled about the centre, over a yellow field that runs
+ * edge to edge with no ink frame.
+ */
+function sampleIcon(x, y) {
+  const c = GRID / 2;
+  return field(c + (x - c) / ICON_SCALE, c + (y - c) / ICON_SCALE);
+}
+
+/** Ring and chip over the yellow field, in design grid units. */
+function field(x, y) {
   const [co, ci] = [CHIP.outer, CHIP.inner];
   if (x >= co[0] && x <= co[1] && y >= co[0] && y <= co[1]) {
     const insideChip = x >= ci[0] && x <= ci[1] && y >= ci[0] && y <= ci[1];
@@ -65,7 +83,7 @@ function render(size) {
         const y = (row * GRID) / size + sy * step + half;
         for (let sx = 0; sx < SAMPLES; sx++) {
           const x = (col * GRID) / size + sx * step + half;
-          const c = sample(x, y);
+          const c = sampleIcon(x, y);
           r += c[0];
           g += c[1];
           b += c[2];

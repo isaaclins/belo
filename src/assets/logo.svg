@@ -4,9 +4,10 @@
 
   <!--
     Canonical Belo mark. One geometry, used by the in-app brand marks and by
-    every generated platform icon (scripts/make-icon.mjs rasterizes exactly
-    these numbers). Neobrutalist: flat opaque color, thick ink strokes, hard
-    edges, no gradients, no transparency, no blur.
+    every generated platform icon (scripts/make-icon.mjs rasterizes these same
+    numbers, minus the frame, which the system already provides on a launcher
+    icon). Neobrutalist: flat opaque color, thick ink strokes, hard edges, no
+    gradients, no transparency, no blur.
 
     Grid: 512. Border 40 wide, so the live field runs 40..472.
     Ring and chip both keep a 28 gap to that field edge.

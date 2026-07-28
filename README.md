@@ -4,7 +4,7 @@ An app for training image classifiers on your own pictures. Collect images, labe
 them, train, and use the result live from your camera. Everything runs on the device:
 no account, no upload, no network calls at runtime.
 
-Version 0.4.2. Desktop and iOS are supported. Android is code-complete but has not yet
+Version 0.4.3. Desktop and iOS are supported. Android is code-complete but has not yet
 been built on an Android toolchain.
 
 ## What it does
@@ -113,7 +113,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 2,
-  "appVersion": "0.4.2",
+  "appVersion": "0.4.3",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -221,12 +221,17 @@ tiles and the iOS home screen. It is a yellow field inside a thick ink frame, a 
 ring in the upper left and a pink chip offset over its lower right, drawn on a 512 unit
 grid with flat color and no gradients, blur or transparency.
 
+Platform icons drop the frame: yellow edge to edge, with the ring and the chip scaled up
+slightly to take the space the frame used to hold. A launcher icon is already framed by
+the system, and on iOS the rounded mask cut the ink band into muddy dark corners. The
+in-app mark keeps its frame, because there it sits on a page and needs an edge.
+
 The same geometry is written three times and the three must be kept in step:
 
 - `src/assets/logo.svg`, the vector master.
 - `src/components/BeloMark.tsx`, the in-app component, which can swap its frame to paper
   so the mark still reads on the ink top bar.
-- `scripts/make-icon.mjs`, which rasterizes it for the icon pipeline.
+- `scripts/make-icon.mjs`, which rasterizes the frameless variant for the icon pipeline.
 
 `npm run icons` runs the whole pipeline: it draws `src-tauri/app-icon.png` at 1024, hands
 that to `tauri icon` for the desktop and Windows sets, then redraws the iOS
