@@ -42,8 +42,10 @@ attention** is only a rough hint about which parts influenced an answer, not obj
 detection. Results also depend on your examples and camera quality, so varied, clear
 pictures usually work better.
 
-A **detect** project, where you draw a box around each object, can be labeled today but
-not trained or used yet: that part arrives in a later update.
+A **detect** project, where you draw a box around each object, can be labeled and trained
+today, and the Train view shows what it finds on your own pictures. Running one live on the
+camera arrives in a later update. Detection also reads a 7x7 grid over the picture, so an
+object much smaller than a seventh of the frame is hard for it to place.
 
 ## FAQ
 
@@ -118,10 +120,16 @@ be switched afterwards.
 - **Detect**: labels sit on drawn rectangles rather than on whole pictures, so one picture
    can hold several objects in different places. The Label view becomes a box annotator
    and the label rail picks the pencil instead of a folder: every picture is always shown,
-   and the count next to a label is how many boxes carry it. Training and live detection
-   are not built yet, so Train and Use show a placeholder until the detection head lands.
+   and the count next to a label is how many boxes carry it. The Train view trains a
+   detection head on those boxes and then shows every scored picture twice over: your
+   boxes in their label colour, the boxes the detector read dashed on top, so a miss and a
+   false alarm are visible instead of averaged away. It wants boxes on at least ten
+   pictures before it will train. Live detection in the Use view arrives in a later
+   update, so that stage still shows a placeholder.
 
-Images with no labels are ignored by training in single and multi mode.
+Images with no labels are ignored by training in single and multi mode. In detect mode a
+picture with no boxes is not ignored: it is a background example, and training uses it to
+learn what nothing looks like.
 
 ## Background retraining and the checkpoint
 
@@ -150,6 +158,37 @@ The classifier is a two-part stack:
   part learns, which is why training takes seconds rather than hours. The output layer is
   a softmax in single label projects and one sigmoid per label in multi label projects.
 
+### The detection head
+
+A detect project trains a different head on the same frozen features, reading the 7x7x1024
+grid rather than the pooled embedding. It follows the SSD recipe:
+
+- **Anchors.** Six per cell, two scales (0.22 and 0.5 of the frame) crossed with three
+  aspect ratios (square, wide, tall), so 294 anchors over the grid. The scales bracket the
+  object sizes a 224 pixel picture can hold and the ratios give an upright and a lying
+  object each an anchor to match on.
+- **Head.** Each cell's 1024 values are standardized, then run through one shared 96 unit
+  layer with dropout and two output layers: four box offsets per anchor, and one score per
+  label plus a background class. Everything is 1x1, never a convolution across cells. One
+  cell of `conv_pw_13_relu` already sees almost the whole picture, and the WASM backend has
+  no gradient kernel for convolution filters at all, so a convolutional head could not be
+  trained on a machine without WebGL.
+- **Boxes.** Standard SSD parameterization: the center shift in anchor widths, the size in
+  log scale, with variances 0.1 and 0.2.
+- **Loss.** Anchors overlapping a drawn box by 0.45 or more answer for it, under 0.35 they
+  are background, in between they are ignored, and every drawn box additionally force
+  matches its single best anchor so nothing is unlearnable. Positives get a smooth L1 loss
+  on the offsets; the classification loss is cross entropy over the positives plus the
+  three hardest background anchors per positive.
+- **Reading it back.** Scores are softmax probabilities with background at index 0.
+  Anything at 0.3 or above survives, then per label suppression at 0.3 overlap removes the
+  duplicates that neighbouring anchors produce.
+
+Training runs its own loop rather than `model.fit`, because of the anchor bookkeeping, and
+it caches the grid features so MobileNet runs once per picture per run. Those cached maps
+are the memory cost of a detect run: 196 KB per picture, so about 20 MB for a hundred
+pictures and 60 MB for three hundred.
+
 TensorFlow.js picks the **WebGL** backend and falls back to **WASM** if WebGL is
 unavailable. The WASM binaries are copied into `public/tfjs-wasm` by `npm run assets`,
 which runs automatically before `dev` and `build`.
@@ -173,6 +212,7 @@ Shapes.belo/
   model/
     head.json         serialized dense head weights, written after a training run
     head.prev.json    checkpoint of the head replaced by the last automatic retrain
+    detect.json       serialized detection head, detect projects only
 ```
 
 `project.json`:
@@ -212,6 +252,11 @@ Shapes.belo/
     "epochs": 40,
     "accuracy": 1,
     "valAccuracy": 1,
+    // detect projects only: the share of drawn boxes found and of detections
+    // that were real, both at half overlap, plus how many boxes were drawn
+    "precision": 0.88,
+    "recall": 0.75,
+    "boxCount": 49,
     "imageCount": 44,
     "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15 }
   },
@@ -222,7 +267,14 @@ Shapes.belo/
 
 `model/head.json` stores the head weights as plain arrays, the label order they were
 trained against and the mode they were trained in, so reopening a project restores a
-working classifier without retraining.
+working classifier without retraining. `model/detect.json` does the same for a detect
+project and additionally records the feature grid, the anchor scales and ratios and the
+head width it was built with, so a head keeps loading if those defaults ever move.
+
+Detect projects are created with different training settings, because a detection head
+sees hundreds of anchors per picture instead of one embedding: 150 epochs, batches of 8, a
+learning rate of 0.002, a head width of 96 and a fifth of the pictures held back. Single
+and multi projects are created with the same settings they always were.
 
 ### Schema versions
 
@@ -266,6 +318,18 @@ Useful extras:
 - `npm run check:boxes` runs the detect mode box seam: drawing in every direction, moving
   against the edges of the picture, all eight resize grips, and a save and reopen round
   trip of version 1, 2 and 3 manifests.
+- `npm run check:detect` runs the detection decision layer: anchor generation and layout,
+  overlap, offset encode and decode round trips, anchor matching including the forced best
+  match, cell standardizing, hard negative mining, suppression and the precision and recall
+  matcher. No TensorFlow, no DOM.
+- `npm run check:learning` is the proof that the detector learns. It builds a synthetic
+  detect project of 64 pictures with coloured shapes at known positions, extracts real
+  features with the bundled MobileNet on the WASM backend, trains the head with the
+  settings a new detect project is created with, and then measures on 24 pictures it never
+  saw. The run is seeded. It currently finds 75 percent of the held out boxes with 88
+  percent of its detections right and a mean overlap of 0.68, against 100 percent on the
+  pictures it trained on. It takes about half a minute, most of it feature extraction,
+  which is cached in the temp folder for reruns. Needs Node 22.15 or newer.
 
 ### Layout
 
@@ -281,6 +345,7 @@ src/
   lib/
     attention.ts          overlay geometry and thresholding, pure functions
     boxes.ts              detect mode box geometry, pure functions
+    detect.ts             anchors, matching, offset coding, suppression, scoring
     thumbSize.ts          grid cell size, remembered per machine
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
     capture.ts            CameraSource seam: the only module that calls getUserMedia
@@ -292,9 +357,11 @@ src/
     ml/backend.ts         WebGL then WASM backend selection
     ml/features.ts        truncated MobileNet feature extractor
     ml/classifier.ts      dense head: build, train, score, serialize
+    ml/detector.ts        detection head: build, train, detect, serialize
   views/                  HomeView, LabelView, CaptureModal, TrainView, UseView
                           BoxAnnotator (detect mode box drawing)
-                          DetectSoonView (detect mode Train and Use placeholder)
+                          DetectTrainView (detect mode training and results)
+                          DetectSoonView (detect mode Use placeholder)
   styles/                 tokens, base, ui primitives, app layout
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
 public/models/            bundled MobileNet weights
