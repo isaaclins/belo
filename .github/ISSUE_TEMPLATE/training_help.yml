@@ -1,0 +1,51 @@
+name: Training help
+description: Ask for help when your model does not learn what you expect
+title: "[Training help]: "
+labels:
+  - training-help
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Training problems are often easier to understand with details about the labels and examples. Do not attach a private .belo project unless you are comfortable sharing every picture it contains.
+
+  - type: textarea
+    id: labels-and-counts
+    attributes:
+      label: Labels and image counts
+      description: List every label and the number of images assigned to it.
+      placeholder: |
+        Cat: 45 images
+        Dog: 38 images
+    validations:
+      required: true
+
+  - type: textarea
+    id: confusion
+    attributes:
+      label: What does the model confuse?
+      description: Explain what you want it to learn, what prediction you get, and any pattern you notice in the mistakes.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: classification-mode
+    attributes:
+      label: Project mode
+      options:
+        - Single label
+        - Multi label
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: image-source
+    attributes:
+      label: Where did the training images come from?
+      options:
+        - Camera
+        - Imported images
+        - Both camera and imported images
+    validations:
+      required: true

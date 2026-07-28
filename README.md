@@ -1,13 +1,69 @@
 # Belo
 
-An app for training image classifiers on your own pictures. Collect images, label
-them, train, and use the result live from your camera. Everything runs on the device:
-no account, no upload, no network calls at runtime.
+[![License: MIT](https://img.shields.io/badge/license-MIT-ffd83d?style=flat-square&labelColor=171717)](#license)
+![Platforms: desktop and iPhone](https://img.shields.io/badge/platforms-desktop%20%7C%20iPhone-f473b9?style=flat-square&labelColor=171717)
 
-Version 0.4.3. Desktop and iOS are supported. Android is code-complete but has not yet
-been built on an Android toolchain.
+Teach your computer to recognize things using your own pictures. Belo keeps every
+picture and project on your device. There is no account, no upload, and no internet
+connection needed after installation.
 
-## What it does
+## Three simple steps
+
+1. **Label.** Name the things you want Belo to recognize, then add pictures from your
+   files or camera.
+2. **Train.** Press one button. Belo learns from your examples and shows how well it is
+   doing, including which pictures it still finds confusing.
+3. **Use.** Point your camera at something, or choose one picture, and see Belo's answer.
+   Correct it when it is wrong so it can learn from that example too.
+
+## Useful things you can do
+
+- **Teach from the live camera.** Hold a teaching button to add several examples, and
+  choose how quickly Belo takes them.
+- **See where Belo is looking.** Turn on **Show attention** for a colored hint showing
+  which parts of the picture influenced each answer.
+- **Give one picture several labels.** For example, the same picture can be both
+  "outdoors" and "dog".
+- **Keep projects you can back up.** On desktop, each `.belo` project is a normal folder
+  containing its pictures and saved learning. You can copy or back it up like any other
+  folder.
+
+## Get Belo
+
+**App Store: coming soon.** Apple developer license approval is currently in progress,
+so there is no App Store listing yet.
+
+Until then, a technical friend can [build Belo from source](#development).
+
+## Honest limitations
+
+Belo does image classification: it decides which labels fit a whole picture. It does not
+find or outline individual objects. **Show attention** is only a rough hint about which
+parts influenced an answer, not object detection. Results also depend on your examples
+and camera quality, so varied, clear pictures usually work better.
+
+## FAQ
+
+### Is my data uploaded anywhere?
+
+No, never. Belo does not send your pictures or projects anywhere.
+
+### Does Belo need the internet?
+
+Only for installation. After Belo is installed, it works without an internet connection.
+
+### Can I use it without a webcam?
+
+Yes. You can import pictures and use a single imported picture for a prediction.
+
+---
+
+# Developer guide
+
+Current app version: **0.4.3**. Desktop and iOS are supported. Android is code-complete
+but has not yet been built on an Android toolchain.
+
+## Detailed workflow
 
 1. **Label.** Create labels, then fill them by dragging in files or whole folders,
    importing from disk, or holding the capture button for a webcam burst. Images can be
