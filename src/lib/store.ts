@@ -16,6 +16,7 @@ import {
   newManifest,
   normalizeRect,
   SWATCH_COUNT,
+  withBoxes,
   withLabels,
   type BoxRect,
   type BoxRecord,
@@ -245,6 +246,13 @@ interface State {
   /** Detect mode: retags one box, for when it was drawn with the wrong label. */
   setBoxLabel: (imageId: string, boxId: string, labelId: string) => void;
   removeBox: (imageId: string, boxId: string) => void;
+  /**
+   * Detect mode: replaces every box on one picture at once. The annotator's
+   * undo hands back a whole list rather than an inverse edit, and the numbers
+   * that come back are the numbers that were stored.
+   */
+  setBoxes: (imageId: string, boxes: BoxRecord[]) => void;
+
   updateSettings: (patch: Partial<TrainSettings>) => void;
   startTraining: () => Promise<void>;
   stopTraining: () => void;
@@ -1510,6 +1518,20 @@ export const useStore = create<State>((set, get) => {
         images: manifest.images.map((img) =>
           img.id === imageId
             ? { ...img, boxes: boxesOf(img).filter((box) => box.id !== boxId) }
+            : img,
+        ),
+      });
+      markStale();
+    },
+
+    setBoxes(imageId, boxes) {
+      const manifest = get().manifest;
+      if (!manifest || manifest.mode !== "detect") return;
+      const known = new Set(manifest.labels.map((label) => label.id));
+      touch({
+        images: manifest.images.map((img) =>
+          img.id === imageId
+            ? withBoxes({ ...img, boxes: boxes.filter((box) => known.has(box.labelId)) }, "detect")
             : img,
         ),
       });

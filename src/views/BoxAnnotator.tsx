@@ -5,10 +5,20 @@
 // pixels appear is the pointer maths, which converts a client point into the
 // frame's own space and back out through percentage positions.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowUUpLeft,
+  ArrowUUpRight,
   BoundingBox,
   Cursor,
   Plus,
@@ -27,7 +37,22 @@ import {
   type Handle,
   type Point,
 } from "../lib/boxes";
-import { boxesOf, MIN_BOX, type BoxRect, type ImageRecord, type Label } from "../lib/types";
+import {
+  boxesOf,
+  MIN_BOX,
+  normalizeRect,
+  type BoxRect,
+  type BoxRecord,
+  type ImageRecord,
+  type Label,
+} from "../lib/types";
+import { emptyUndo, redo, undo, recordUndo, type UndoState } from "../lib/undo";
+
+/** True when a committed drag ends exactly where the stored box already is. */
+function unchanged(box: BoxRecord | undefined, rect: BoxRect | null): boolean {
+  if (!box || !rect) return false;
+  return box.x === rect.x && box.y === rect.y && box.w === rect.w && box.h === rect.h;
+}
 
 function percent(rect: BoxRect) {
   return {
@@ -58,6 +83,7 @@ export function BoxAnnotator({
   const updateBox = useStore((s) => s.updateBox);
   const setBoxLabel = useStore((s) => s.setBoxLabel);
   const removeBox = useStore((s) => s.removeBox);
+  const setBoxes = useStore((s) => s.setBoxes);
   const toast = useStore((s) => s.toast);
 
   const stageRef = useRef<HTMLDivElement>(null);
@@ -71,8 +97,16 @@ export function BoxAnnotator({
   /** Armed pencil: every press draws, even on top of an existing box. */
   const [drawTool, setDrawTool] = useState(false);
 
+  // Undo history, one stack per picture, held in a ref so a press does not
+  // depend on a render having landed. It lives exactly as long as the annotator
+  // is open: closing it is what clears the history, on purpose, because a
+  // reopened picture is a fresh session and the boxes on disk are the truth.
+  const undoRef = useRef(new Map<string, UndoState>());
+  const [, bump] = useReducer((count: number) => count + 1, 0);
+
   const image = images[index] ?? null;
   const boxes = image ? boxesOf(image) : [];
+  const history = image ? (undoRef.current.get(image.id) ?? emptyUndo()) : emptyUndo();
   const activeLabel = labels.find((l) => l.id === activeLabelId) ?? null;
   const labelById = useMemo(() => new Map(labels.map((l) => [l.id, l] as const)), [labels]);
 
@@ -119,20 +153,56 @@ export function BoxAnnotator({
     };
   }, []);
 
+  /**
+   * Remembers the boxes as they are, right before an edit changes them. Called
+   * only where something really is about to change, so every press of undo is
+   * one visible step back rather than a couple of no-ops first.
+   */
+  const remember = useCallback(() => {
+    if (!image) return;
+    const current = undoRef.current.get(image.id) ?? emptyUndo();
+    undoRef.current.set(image.id, recordUndo(current, boxesOf(image)));
+    bump();
+  }, [image]);
+
+  /** Puts one recorded state back, exactly as it was stored. */
+  const walk = useCallback(
+    (direction: "back" | "forward") => {
+      if (!image) return;
+      const current = undoRef.current.get(image.id) ?? emptyUndo();
+      const step =
+        direction === "back" ? undo(current, boxesOf(image)) : redo(current, boxesOf(image));
+      if (!step) return;
+      undoRef.current.set(image.id, step.state);
+      setBoxes(image.id, step.boxes);
+      setSelected((picked) => (step.boxes.some((box) => box.id === picked) ? picked : null));
+      bump();
+    },
+    [image, setBoxes],
+  );
+
   const commit = useCallback(
     (drag: Drag) => {
       if (!image) return;
       if (drag.kind === "draw") {
         if (!activeLabelId) return;
-        const id = addBox(image.id, activeLabelId, drag.rect);
         // Too small to be deliberate: the press was a tap on empty space, which
-        // already cleared the selection on the way down.
+        // already cleared the selection on the way down, and nothing to undo.
+        if (!normalizeRect(drag.rect)) return;
+        remember();
+        const id = addBox(image.id, activeLabelId, drag.rect);
         if (id) setSelected(id);
         return;
       }
-      if (drag.boxId) updateBox(image.id, drag.boxId, drag.rect);
+      if (!drag.boxId) return;
+      const rect = normalizeRect(drag.rect);
+      // A press that picked a box up and put it straight back down is not an
+      // edit, so it neither marks the project stale nor costs an undo step.
+      if (!rect || unchanged(boxesOf(image).find((box) => box.id === drag.boxId), rect)) return;
+      remember();
+      updateBox(image.id, drag.boxId, drag.rect);
     },
-    [activeLabelId, addBox, image, updateBox],
+    [activeLabelId, addBox, image, remember, updateBox],
   );
 
   // One pair of window listeners for the whole session. They no-op unless a
@@ -179,14 +249,21 @@ export function BoxAnnotator({
 
   const dropSelected = useCallback(() => {
     if (!image || !selected) return;
+    if (!boxesOf(image).some((box) => box.id === selected)) return;
+    remember();
     removeBox(image.id, selected);
     setSelected(null);
-  }, [image, removeBox, selected]);
+  }, [image, remember, removeBox, selected]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        walk(event.shiftKey ? "forward" : "back");
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         onClose();
@@ -218,7 +295,7 @@ export function BoxAnnotator({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dropSelected, labels, onClose, selected, setActiveLabel, step]);
+  }, [dropSelected, labels, onClose, selected, setActiveLabel, step, walk]);
 
   const startDraw = (event: React.PointerEvent) => {
     if (event.button !== 0) return;
@@ -264,7 +341,11 @@ export function BoxAnnotator({
   const pickLabel = (label: Label) => {
     setActiveLabel(label.id);
     // Picking a label with a box selected is the natural way to fix a wrong tag.
-    if (image && selected) setBoxLabel(image.id, selected, label.id);
+    if (!image || !selected) return;
+    const box = boxesOf(image).find((candidate) => candidate.id === selected);
+    if (!box || box.labelId === label.id) return;
+    remember();
+    setBoxLabel(image.id, selected, label.id);
   };
 
   if (!image || !path) return null;
@@ -298,6 +379,24 @@ export function BoxAnnotator({
           aria-label="Next picture"
         >
           <ArrowRight size={16} weight="bold" />
+        </button>
+        <button
+          className="iconbtn"
+          onClick={() => walk("back")}
+          disabled={history.past.length === 0}
+          title="Undo the last change to this picture (cmd or ctrl + z)"
+          aria-label="Undo"
+        >
+          <ArrowUUpLeft size={16} weight="bold" />
+        </button>
+        <button
+          className="iconbtn"
+          onClick={() => walk("forward")}
+          disabled={history.future.length === 0}
+          title="Redo the change you just undid (shift + cmd or ctrl + z)"
+          aria-label="Redo"
+        >
+          <ArrowUUpRight size={16} weight="bold" />
         </button>
         <span className="badge badge--idle">
           {boxes.length} box{boxes.length === 1 ? "" : "es"}
@@ -452,7 +551,8 @@ export function BoxAnnotator({
               </p>
             )}
             <p className="field__hint mono anno__keys">
-              arrows: other pictures · 1 to 9: label · delete: remove box · esc: close
+              arrows: other pictures · 1 to 9: label · delete: remove box · cmd z: undo · esc:
+              close
             </p>
           </div>
         </aside>
