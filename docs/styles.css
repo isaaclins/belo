@@ -685,14 +685,18 @@ img, svg { display: block; max-width: 100%; }
   margin-bottom: 22px;
 }
 
+/* A grid, not a flex column, so the heading, the one line of small type and
+   the download button sit in the same three rows on every card and the buttons
+   line up across the row whatever the small print underneath them says. */
 .dl {
   background: var(--panel);
   border: var(--border-w) solid var(--ink);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 26px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  align-content: start;
   gap: 14px;
 }
 
@@ -709,9 +713,9 @@ img, svg { display: block; max-width: 100%; }
   margin: 0;
 }
 
-/* The download button carries the card, so it sits above the small print and
-   stretches to the full card width on every screen. */
-.dl .btn { width: 100%; margin-top: auto; }
+/* The download button carries the card, so it stretches to the full width on
+   every screen. */
+.dl .btn { width: 100%; }
 .dl:first-child .btn { background: var(--panel); }
 
 .dl__alt {
