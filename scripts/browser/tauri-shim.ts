@@ -56,8 +56,22 @@ const commands: Record<string, (args: Args) => unknown> = {
   write_model: ({ path, weights }: Args) => void files.set(`${path}/model/head.json`, String(weights)),
   read_model: ({ path }: Args) => files.get(`${path}/model/head.json`) ?? null,
   write_detector: ({ path, weights }: Args) =>
-    void files.set(`${path}/model/detector.json`, String(weights)),
-  read_detector: ({ path }: Args) => files.get(`${path}/model/detector.json`) ?? null,
+    void files.set(`${path}/model/detect.json`, String(weights)),
+  read_detector: ({ path }: Args) => files.get(`${path}/model/detect.json`) ?? null,
+
+  list_model_files: ({ path }: Args) =>
+    [...files.keys()]
+      .filter((key) => key.startsWith(`${path}/model/`))
+      .map((key) => key.slice(`${path}/model/`.length))
+      .filter((name) => !name.includes("/"))
+      .sort(),
+  delete_model_files: ({ path, names }: Args) => {
+    for (const name of names as string[]) files.delete(`${path}/model/${name}`);
+  },
+
+  // The export lands in the same map, so a check can read the archive back out.
+  write_export: ({ path, data }: Args) => void files.set(String(path), String(data)),
+  "plugin:dialog|save": () => exportTarget,
 
   write_checkpoint: ({ path, weights }: Args) =>
     void files.set(`${path}/model/head.prev.json`, String(weights)),
@@ -93,6 +107,18 @@ const commands: Record<string, (args: Args) => unknown> = {
   read_file_base64: ({ path }: Args) => must(files, String(path), "file"),
   list_images_in_dir: () => [],
 };
+
+/** Where the fake save dialog says the next export should go. */
+let exportTarget = "/mem/export/model.zip";
+
+export function fakeExportTarget(path: string): void {
+  exportTarget = path;
+}
+
+/** The base64 archive a finished export wrote, or null when there is none. */
+export function writtenExport(path: string): string | null {
+  return files.get(path) ?? null;
+}
 
 export function installTauriShim(): void {
   const internals = {

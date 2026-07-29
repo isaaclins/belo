@@ -248,6 +248,71 @@ fn model_file_exists(path: &str, name: &str) -> Res<bool> {
     Ok(bundle_root(path)?.join(MODEL_DIR).join(name).exists())
 }
 
+/// Every file Belo itself writes into model/. Nothing else may be deleted from
+/// there, so a file somebody put in the folder by hand is safe from the cleanup
+/// the frontend performs when a model becomes invalid.
+const OWNED_MODEL_FILES: [&str; 4] = [
+    MODEL_FILE,
+    CHECKPOINT_FILE,
+    DETECTOR_FILE,
+    DETECTOR_CHECKPOINT_FILE,
+];
+
+/// Lists what is in model/ so the frontend can decide what has gone stale. Only
+/// plain files are reported: a directory in there is not something Belo wrote.
+#[tauri::command]
+fn list_model_files(path: String) -> Res<Vec<String>> {
+    let dir = bundle_root(&path)?.join(MODEL_DIR);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+/// Deletes invalidated model files. A name outside the owned list is an error
+/// rather than a no-op, because it can only come from a bug on the frontend side
+/// and silently ignoring it would hide that.
+#[tauri::command]
+fn delete_model_files(path: String, names: Vec<String>) -> Res<()> {
+    let dir = bundle_root(&path)?.join(MODEL_DIR);
+    for name in names {
+        let name = safe_name(&name)?;
+        if !OWNED_MODEL_FILES.contains(&name) {
+            return Err(format!("not a Belo model file: {name}"));
+        }
+        let target = dir.join(name);
+        if target.is_file() {
+            fs::remove_file(&target).map_err(|e| fail("could not delete the model file", e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Writes a finished model export where the save dialog pointed. The archive is
+/// built in the webview, so this only decodes and writes it, and it refuses
+/// anything that is not a .zip so a stray path cannot overwrite a project file.
+#[tauri::command]
+fn write_export(path: String, data: String) -> Res<()> {
+    let target = PathBuf::from(&path);
+    if target.extension().and_then(|e| e.to_str()) != Some("zip") {
+        return Err(format!("an export has to be a .zip file: {path}"));
+    }
+    let bytes = B64
+        .decode(data.as_bytes())
+        .map_err(|e| fail("bad export payload", e))?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| fail("could not create the target folder", e))?;
+    }
+    fs::write(&target, bytes).map_err(|e| fail("could not write the export", e))
+}
+
 #[tauri::command]
 fn write_checkpoint(path: String, weights: String) -> Res<()> {
     write_model_file(&path, CHECKPOINT_FILE, weights, "checkpoint")
@@ -510,6 +575,79 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// A unique bundle path per test, filename safe on every platform.
+    fn temp_bundle(what: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "zz-belo-{what}-{}-{unique}.belo",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn model_cleanup_touches_only_the_files_belo_writes() {
+        let root = temp_bundle("cleanup");
+        let model_dir = root.join(MODEL_DIR);
+        fs::create_dir_all(model_dir.join("notes")).unwrap();
+        for name in OWNED_MODEL_FILES {
+            fs::write(model_dir.join(name), "{}").unwrap();
+        }
+        fs::write(model_dir.join("mine.json"), "keep me").unwrap();
+        let path = root.to_string_lossy().to_string();
+
+        let listed = list_model_files(path.clone()).unwrap();
+        assert_eq!(
+            listed,
+            vec![
+                "detect.json",
+                "detect.prev.json",
+                "head.json",
+                "head.prev.json",
+                "mine.json"
+            ],
+            "the directory in model/ must not be listed as a file"
+        );
+
+        // A file Belo did not write is refused, and refusing it deletes nothing.
+        assert!(delete_model_files(path.clone(), vec!["mine.json".into()]).is_err());
+        assert!(delete_model_files(path.clone(), vec!["../project.json".into()]).is_err());
+        assert!(model_dir.join("mine.json").is_file());
+
+        delete_model_files(
+            path.clone(),
+            vec!["head.json".into(), "detect.prev.json".into()],
+        )
+        .unwrap();
+        assert!(!model_dir.join(MODEL_FILE).exists());
+        assert!(!model_dir.join(DETECTOR_CHECKPOINT_FILE).exists());
+        assert!(model_dir.join(CHECKPOINT_FILE).is_file());
+        assert!(model_dir.join("mine.json").is_file());
+
+        // Deleting the same file twice is not an error: the state is what matters.
+        delete_model_files(path, vec!["head.json".into()]).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_export_is_written_only_to_a_zip_path() {
+        let root = temp_bundle("export");
+        fs::create_dir_all(&root).unwrap();
+        let good = root.join("model.zip");
+        let bad = root.join("project.json");
+        let payload = B64.encode([0x50u8, 0x4b, 0x05, 0x06]);
+
+        assert!(write_export(bad.to_string_lossy().to_string(), payload.clone()).is_err());
+        assert!(!bad.exists());
+        write_export(good.to_string_lossy().to_string(), payload).unwrap();
+        assert_eq!(fs::read(&good).unwrap(), vec![0x50, 0x4b, 0x05, 0x06]);
+        assert!(write_export(good.to_string_lossy().to_string(), "not base64!".into()).is_err());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn detector_checkpoint_round_trips_exact_bytes_and_clears_cleanly() {
         let unique = std::time::SystemTime::now()
@@ -553,6 +691,9 @@ pub fn run() {
             read_model,
             write_detector,
             read_detector,
+            list_model_files,
+            delete_model_files,
+            write_export,
             write_checkpoint,
             read_checkpoint,
             has_checkpoint,

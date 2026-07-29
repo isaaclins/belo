@@ -46,6 +46,15 @@ export interface ProjectStorage {
   writeDetector(handle: string, weights: string): Promise<void>;
   readDetector(handle: string): Promise<string | null>;
 
+  /** Names of everything inside the bundle's model folder, whoever wrote it. */
+  listModelFiles(handle: string): Promise<string[]>;
+  /**
+   * Deletes model files that have become invalid. Only the four files Belo
+   * writes are accepted; anything else is refused by the Rust side rather than
+   * quietly deleted, so nothing outside the app's own output can be lost.
+   */
+  deleteModelFiles(handle: string, names: string[]): Promise<void>;
+
   /** Copy of the head kept before an automatic retrain, used by the revert action. */
   writeCheckpoint(handle: string, weights: string): Promise<void>;
   readCheckpoint(handle: string): Promise<string | null>;
@@ -73,6 +82,11 @@ export interface ProjectStorage {
   pickImportFolder(): Promise<ImportRef[] | null>;
   /** Loads one picked image so the app can normalize it. */
   readImport(ref: ImportRef): Promise<ImportPayload>;
+
+  /** Native save dialog for a model export. Resolves to null when cancelled. */
+  pickExportTarget(suggestedName: string): Promise<string | null>;
+  /** Writes the finished export archive, base64 encoded, to a picked path. */
+  writeExport(path: string, base64: string): Promise<void>;
 }
 
 const IS_WINDOWS = typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
@@ -184,6 +198,10 @@ const desktopStorage: ProjectStorage = {
 
   readDetector: (path) => invoke("read_detector", { path }),
 
+  listModelFiles: (path) => invoke("list_model_files", { path }),
+
+  deleteModelFiles: (path, names) => invoke("delete_model_files", { path, names }),
+
   writeCheckpoint: (path, weights) => invoke("write_checkpoint", { path, weights }),
 
   readCheckpoint: (path) => invoke("read_checkpoint", { path }),
@@ -236,6 +254,18 @@ const desktopStorage: ProjectStorage = {
     const base64: string = await invoke("read_file_base64", { path: ref.id });
     return { base64, mime: mimeFor(ref.id) };
   },
+
+  async pickExportTarget(suggestedName) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const picked = await save({
+      title: "Export the trained model",
+      defaultPath: suggestedName,
+      filters: [{ name: "Zip archive", extensions: ["zip"] }],
+    });
+    return typeof picked === "string" ? picked : null;
+  },
+
+  writeExport: (path, data) => invoke("write_export", { path, data }),
 };
 
 /** Mobile backend: projects stay in the sandbox and media comes from the native picker. */
@@ -253,6 +283,14 @@ const mobileStorage: ProjectStorage = {
 
   async pickImportFolder() {
     throw new Error("Folder import is not available on mobile. Choose photos instead.");
+  },
+
+  // The native save dialog is a desktop control; a phone has no folder to point
+  // it at. An export therefore lands next to the projects, inside the app's own
+  // Documents folder, and the toast says where it went.
+  async pickExportTarget(suggestedName) {
+    const dir: string = await invoke("default_projects_dir");
+    return join(dir, suggestedName);
   },
 
   async readImport(ref) {
