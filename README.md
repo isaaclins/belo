@@ -117,8 +117,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.6.2**. Desktop and iOS are supported. Android is code-complete
-but has not yet been built on an Android toolchain.
+Current app version: **0.6.3**. Desktop, iOS and Android all build.
 
 ## Detailed workflow
 
@@ -148,8 +147,11 @@ but has not yet been built on an Android toolchain.
    at 60 frames. The **Rate** control next to those buttons picks 2, 4, 8 or 12 frames per
    second and drives the Label view burst as well, so the app has one capture speed;
    frames are dropped rather than queued if the disk cannot keep up. While the camera runs, **Show attention** overlays where the
-   evidence for the current call sits: a tinted heat map plus one box per label. It reads
-   the classifier's own 7x7 feature grid, so it is a coarse hint at roughly a 32 pixel
+   evidence for the current call sits: a tinted heat map plus one box per label. In a multi
+   label project every label that answered yes gets its own tint and its own box on one
+   shared layer, with all the tints painted first and the boxes on top, so a second label's
+   heat map cannot wash out the first label's box. It reads the classifier's own 7x7 feature
+   grid, so it is a coarse hint at roughly a 32 pixel
    resolution and never an object detector. The toggle starts off and is remembered until
    the app closes, never in the project. Detect projects use their real detector instead:
    every object above the chosen score threshold gets a coloured box, name and score over
@@ -356,7 +358,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.6.2",
+  "appVersion": "0.6.3",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -460,17 +462,24 @@ npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
 ```
 
-Detection release verification. `npm test` runs all six in this order and prints how long
-each one took, which is exactly what CI does:
+Release verification. `npm test` runs all eight in this order and prints how long each one
+took, which is exactly what CI does:
 
 ```bash
 npm run check:boxes       # manifest v3 and one-finger box geometry
 npm run check:detect      # anchors, loss inputs, decoding, scoring and flip geometry
 npm run check:curve       # which epoch a run keeps and what it tells you afterwards
 npm run check:store       # stale-model persistence, saves, retrain policy, checkpoint, undo
-npm run check:camera      # live camera switching seam
+npm run check:camera      # camera seam against a mocked MediaDevices
+npm run check:camera-live # a real camera session in headless Chrome, with fake devices
+npm run check:overlay     # the multi label attention overlay, trained and painted for real
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
+
+The two browser checks drive headless Chrome over the DevTools protocol. They never take
+over the screen, they serve the app on a free port that is never 1420, and they report
+`skipped` instead of failing on a machine with no Chrome, which is why CI stays green
+without one. `CHROME_PATH` picks a specific browser.
 
 One more measurement is not part of `npm test`, because it downloads photographs:
 
@@ -605,8 +614,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.6.2 && git push origin
-v0.6.2`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.6.3 && git push origin
+v0.6.3`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -616,6 +625,26 @@ Useful extras:
 - `npm run assets` refreshes the bundled TensorFlow.js WASM binaries.
 - `npm run check:camera` runs the camera seam against a mocked `MediaDevices`, which covers
   device switching, stale mobile ids and hot plug on a machine with a single webcam.
+- `npm run check:camera-live` runs the same seam plus `useWebcam` for real, in headless
+  Chrome started with three fake capture devices. It starts a session, enumerates the
+  cameras through the seam, switches device mid stream and asserts the old tracks ended,
+  the new stream opened the device that was asked for, the video element shows it and the
+  pick landed in `localStorage`. It then hides one device behind `enumerateDevices` and
+  fires a real `devicechange`: the picker has to drop it, the stream has to come back on
+  another camera, and the remembered pick is deliberately kept so a camera that returns is
+  honored again. Finally it proves a stale deviceId opens the default camera instead of
+  failing. About three seconds.
+- `npm run check:overlay` is the end to end proof of the attention overlay. In headless
+  Chrome it creates a real multi label project through the store, writes eighteen synthetic
+  pictures, trains the real head, predicts with attention on and mounts the real
+  `AttentionOverlay` over a live camera feed. Each shape appears on both sides of the frame
+  across the training set, so a model that learned position instead of content fails the
+  mirrored frame. It asserts one canvas layer, one map per label above the multi label
+  threshold, the hot half of each score map, and then reads the canvas back: the painted box
+  of each label has to match the box the geometry says it should be, to within a pixel, and
+  turning the overlay off has to clear the layer. The storage backend is an in-memory fake
+  of the two Tauri entry points in `scripts/browser/tauri-shim.ts`; nothing in `src/` is
+  changed or mocked. About five seconds.
 - `npm run check:boxes` runs the detect mode box seam: drawing in every direction, moving
   against the edges of the picture, all eight resize grips, and a save and reopen round
   trip of version 1, 2 and 3 manifests.
@@ -792,44 +821,78 @@ picker, labeling and training interaction still need a physical-device pass.
 
 ### Android
 
-Android was not built locally because this machine intentionally has no SDK or NDK. The
-committed Android configuration sets API 24 as the minimum, version code 2000, sandboxed
-Documents storage, and `android.permission.CAMERA`. wry requests the runtime camera grant.
-The system photo picker supplies temporary URI access, and `tauri-plugin-fs` reads those
-URIs without broad media-library permissions.
+The Android app builds. `src-tauri/gen/android` is committed the same way
+`src-tauri/gen/apple` is: the project sources are in git, and the generated sources, the
+native libraries, `local.properties` and every build output are covered by the `.gitignore`
+files Tauri writes inside that folder. Configuration is API 24 as the minimum, version code
+2000, sandboxed Documents storage and `android.permission.CAMERA`. wry asks for the runtime
+camera grant. The system photo picker supplies temporary URI access, and `tauri-plugin-fs`
+reads those URIs without broad media-library permissions.
 
-To finish verification on a machine with Android Studio:
+The camera permission is declared in `gen/android/app/src/main/AndroidManifest.xml` and
+nowhere else. Tauri does not generate Android permissions from `Cargo.toml`, so the
+`[package.metadata.android] app-permissions` key an earlier version of this file suggested
+was silently ignored and the first real build shipped without the permission. Editing the
+committed manifest is the supported route.
 
-1. In SDK Manager, install the current Android SDK Platform, Platform-Tools, Build-Tools,
-   Command-line Tools, and NDK (Side by side).
-2. Set the toolchain environment variables and Rust targets:
+What the toolchain needs, user-local and without sudo:
 
-   ```bash
-   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
-   export ANDROID_HOME="$HOME/Library/Android/sdk"
-   export NDK_HOME="$ANDROID_HOME/ndk/$(ls -1 "$ANDROID_HOME/ndk" | tail -1)"
-   rustup target add aarch64-linux-android armv7-linux-androideabi \
-     i686-linux-android x86_64-linux-android
-   ```
+```bash
+# One time: SDK platform, platform-tools, build-tools, cmake and the NDK, under
+# ~/Library/Android/sdk, with the licences accepted non-interactively.
+sdkmanager --install "platforms;android-36" "platform-tools" "build-tools;36.0.0" \
+  "ndk;28.2.13676358" "cmake;4.1.2"
+yes | sdkmanager --licenses
 
-3. Generate the Android Studio project, then confirm its manifest contains the camera
-   permission generated from `Cargo.toml`:
+rustup target add aarch64-linux-android armv7-linux-androideabi \
+  i686-linux-android x86_64-linux-android
+```
 
-   ```bash
-   npx tauri android init
-   grep android.permission.CAMERA src-tauri/gen/android/app/src/main/AndroidManifest.xml
-   ```
+Then, per shell, a JDK 21 and the SDK paths. Any JDK 21 works; this was built with the
+Homebrew `openjdk@21`:
 
-4. Build and run on an emulator or device:
+```bash
+export JAVA_HOME="$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home)"
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export NDK_HOME="$ANDROID_HOME/ndk/$(ls -1 "$ANDROID_HOME/ndk" | tail -1)"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 
-   ```bash
-   npx tauri android build --debug
-   npx tauri android dev
-   ```
+npx tauri android init            # only needed once, gen/android is committed
+npx tauri android build --debug --apk --split-per-abi
+npx tauri android dev             # on an emulator or a connected device
+```
 
-5. Verify project creation and reopening, multi-photo import, two-label training, model
-   restoration after relaunch, camera denial and grant behavior, live classification,
-   and rotation or resize behavior.
+One APK per ABI keeps each artifact to one native library instead of four. The first build
+downloads Gradle 8.14.3 and takes a while; afterwards the Rust compile dominates.
+
+Verified on 2026-07-30 with the SDK above, NDK 28.2.13676358, Gradle 8.14.3 and JDK 21.0.11
+on an Apple Silicon Mac. All four debug APKs built:
+
+| ABI | APK | Size |
+| --- | --- | --- |
+| arm64-v8a | `app-arm64-debug.apk` | 141 MB |
+| armeabi-v7a | `app-arm-debug.apk` | 126 MB |
+| x86 | `app-x86-debug.apk` | 133 MB |
+| x86_64 | `app-x86_64-debug.apk` | 142 MB |
+
+A debug APK is that large because the unstripped debug `libbelo_lib.so` carries the whole
+frontend bundle, the MobileNet weights and the TensorFlow.js WASM binaries. `aapt2 dump
+badging` on the arm64 APK reads:
+
+```
+package: name='app.belo' versionCode='2000' versionName='0.6.3'
+minSdkVersion:'24'  targetSdkVersion:'36'
+uses-permission: name='android.permission.INTERNET'
+uses-permission: name='android.permission.CAMERA'
+uses-feature-not-required: name='android.hardware.camera'
+native-code: 'arm64-v8a'
+```
+
+Not done yet: no emulator run. No arm64 system image is installed and booting one is a
+foreground activity, so installing, launching and exercising the app on Android is still
+outstanding, as is the on-device pass for project creation and reopening, multi-photo
+import, two-label training, model restoration after relaunch, camera denial and grant
+behavior, live classification, and rotation or resize behavior.
 
 ## Camera and permissions
 
