@@ -1,5 +1,6 @@
 # Belo
 
+[![test](https://github.com/isaaclins/belo/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/isaaclins/belo/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-ffd83d?style=flat-square&labelColor=171717)](#license)
 ![Platforms: desktop and iPhone](https://img.shields.io/badge/platforms-Desktop%20%7C%20Mobile-f473b9?style=flat-square&labelColor=171717)
 
