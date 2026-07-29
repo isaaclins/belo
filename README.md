@@ -83,15 +83,15 @@ so there is no App Store listing yet.
 ## Honest limitations
 
 Results depend on your examples and camera quality, so varied, clear pictures usually work
-better. Detection reads a 7x7 grid over the picture, so an object much smaller than a
-seventh of the frame is hard for it to place. Training detection on a phone can also use a
-lot of memory, so desktop is the safer choice for a large project.
+better. Detection reads a 14x14 and a 7x7 grid over the picture, so an object much smaller
+than a seventh of the frame is still hard for it to place. Training detection on a phone
+can also use a lot of memory, so desktop is the safer choice for a large project.
 
 **Detection is much weaker on messy photographs than on tidy ones.** Measured on 169 real
-photographs of people, cats and dogs from COCO, Belo finds about half of the objects a
-person drew and about half of what it reports is real. Most of the misses are not the wrong
-object; they are a box on the right object that is too small or off by a grid cell. It does
-far better on the case it is built for: one object you photograph yourself, from a few
+photographs of people, cats and dogs from COCO, Belo finds a little over half of the
+objects a person drew and about half of what it reports is real. Most of the misses are not
+the wrong object; they are a box on the right object that is too small or off centre. It
+does far better on the case it is built for: one object you photograph yourself, from a few
 angles, filling a decent part of the frame. The numbers and the reasoning are in
 [Detection on real photographs](#detection-on-real-photographs).
 
@@ -218,30 +218,48 @@ The classifier is a two-part stack:
 
 ### The detection head
 
-A detect project trains a different head on the same frozen features, reading the 7x7x1024
-grid rather than the pooled embedding. It follows the SSD recipe:
+A detect project trains a different head on the same frozen features, reading grids rather
+than the pooled embedding. It follows the SSD recipe:
 
-- **Anchors.** Six per cell, two scales (0.22 and 0.5 of the frame) crossed with three
-  aspect ratios (square, wide, tall), so 294 anchors over the grid. The scales bracket the
-  object sizes a 224 pixel picture can hold and the ratios give an upright and a lying
-  object each an anchor to match on.
-- **Head.** Each cell's 1024 values are standardized, then run through one shared 96 unit
-  layer with dropout and two output layers: four box offsets per anchor, and one score per
-  label plus a background class. Everything is 1x1, never a convolution across cells. One
-  cell of `conv_pw_13_relu` already sees almost the whole picture, and the WASM backend has
-  no gradient kernel for convolution filters at all, so a convolutional head could not be
-  trained on a machine without WebGL.
+- **Two feature maps.** `conv_pw_13_relu` at 7x7x1024, and `conv_pw_11_relu` one stage
+  earlier at 14x14x512. Both come out of a single MobileNet pass, because the fine map is
+  an activation the coarse one is computed from. The second map is there for placement, not
+  for recognition: one cell of `conv_pw_13_relu` already sees most of the picture and knows
+  there is a dog in it, but every box it can propose starts from a grid whose centres are
+  32 pixels apart, and on real photographs that was the difference between a box on the
+  right animal and a box on the right animal at IoU 0.5.
+- **Anchors.** Six per cell on each map, two scales crossed with three aspect ratios
+  (square, wide, tall): 0.3 and 0.45 of the frame on the fine map, 0.58 and 0.82 on the
+  coarse one, for 1470 anchors in all against 294 on one map. The finer map carries the
+  smaller anchors, the standard SSD assignment. The ladder itself was measured rather than
+  copied: the textbook ladder puts the fine anchors around a sixth of the frame, which is
+  right when the fine map is an early layer with a small receptive field, and
+  `conv_pw_11_relu` is eleven blocks deep and nothing like that.
+- **Head.** Each map gets its own branch: the cell values are standardized on that map's
+  own depth, then run through one shared 96 unit layer with dropout and two output layers,
+  four box offsets per anchor and one score per label plus a background class. The branches
+  are concatenated coarse first, which is what makes a one map head saved by an older
+  version exactly the first branch of a two map one. Everything is 1x1, never a convolution
+  across cells, because the WASM backend has no gradient kernel for convolution filters at
+  all, so a convolutional head could not be trained on a machine without WebGL. The second
+  branch costs about half again as many parameters: 102,474 to 155,796 at 96 units and two
+  labels.
 - **Boxes.** Standard SSD parameterization: the center shift in anchor widths, the size in
   log scale, with variances 0.1 and 0.2.
-- **Loss.** Anchors overlapping a drawn box by 0.45 or more answer for it, under 0.35 they
+- **Loss.** Anchors overlapping a drawn box by 0.5 or more answer for it, under 0.4 they
   are background, in between they are ignored, and every drawn box additionally force
   matches its single best anchor so nothing is unlearnable. Positives get a smooth L1 loss
   on the offsets; the classification loss is cross entropy over the positives plus the
-  three hardest background anchors per positive.
+  three hardest background anchors per positive. On a single grid this pair had to be
+  loosened to 0.45 and 0.35 to give each box more than one positive anchor; with five times
+  the anchors the textbook pair is right again, and looser matching only teaches the head
+  that a roughly placed box is correct.
 - **Reading it back.** Scores are softmax probabilities with background at index 0.
-  Anything at 0.3 or above survives by default, then per label suppression at 0.3 overlap
-  removes the duplicates that neighbouring anchors produce. The Use view can move the
-  score cutoff between 0.2, 0.3, 0.5 and 0.7 without retraining.
+  Anything at 0.3 or above survives by default, then per label suppression at 0.15 overlap
+  removes the duplicates that neighbouring anchors produce. Two maps make the same object
+  answer twice, once per grid, and the two answers rarely overlap enough for the older 0.3
+  cutoff to merge them. The Use view can move the score cutoff between 0.2, 0.3, 0.5 and
+  0.7 without retraining.
 - **Mirrored copies.** Detect training shows the head a horizontally flipped copy of every
   training picture, with the boxes flipped with it, under a mild brightness and saturation
   jitter. It is on by default and can be switched off in the Train view settings. The
@@ -261,17 +279,22 @@ grid rather than the pooled embedding. It follows the SSD recipe:
 
 Training runs its own loop rather than `model.fit`, because of the anchor bookkeeping, and
 it caches the grid features so MobileNet runs once per picture per run. Those cached maps
-are the memory cost of a detect run: 196 KB per picture, so about 20 MB for a hundred
-pictures and 60 MB for three hundred. Mirrored copies double that, because an augmented
-variant is a second feature map over the same file: about 40 MB for a hundred pictures and
-120 MB for three hundred. Switching the toggle off halves it again.
+are the memory cost of a detect run, and the second map is the one real price of the finer
+grid: a packed example is 588 KB per picture against 196 KB before, so about 59 MB for a
+hundred pictures and 177 MB for three hundred. Mirrored copies double that, because an
+augmented variant is a second pair of maps over the same file: about 118 MB for a hundred
+pictures. Switching the toggle off halves it again. Inference is barely affected, because
+the extra map is an activation MobileNet computes either way: measured on WASM, one
+extractor pass costs the same to the tenth of a millisecond with one output or two, and the
+head and decoder go from 0.6 ms to 2.0 ms per frame.
 
 The runtime inference contract is `detectSpatialMap(detector, cells, options)` in
-`src/lib/ml/detector.ts`. It accepts one 7x7 spatial feature map and returns normalized
-`x`, `y`, `w`, `h`, label and score values after thresholding and per-label suppression.
-The app-facing `store.detectObjects(source, scoreThreshold)` extracts that map, calls the
-same contract used by the live and still-image views, and always disposes the tensor it
-owns.
+`src/lib/ml/detector.ts`. It accepts one packed pair of feature maps, coarse first, and
+returns normalized `x`, `y`, `w`, `h`, label and score values after thresholding and per
+label suppression. A head restored from an older project reads only the coarse prefix of
+the same buffer, which is what lets a detect model trained before 0.6.1 keep working
+unchanged. The app-facing `store.detectObjects(source, scoreThreshold)` extracts the maps
+and calls the same contract used by the live and still-image views.
 
 TensorFlow.js picks the **WebGL** backend and falls back to **WASM** if WebGL is
 unavailable. The WASM binaries are copied into `public/tfjs-wasm` by `npm run assets`,
@@ -356,8 +379,13 @@ Shapes.belo/
 `model/head.json` stores the head weights as plain arrays, the label order they were
 trained against and the mode they were trained in, so reopening a project restores a
 working classifier without retraining. `model/detect.json` does the same for a detect
-project and additionally records the feature grid, the anchor scales and ratios and the
-head width it was built with, so a head keeps loading if those defaults ever move.
+project and additionally records every feature map the head reads, with the anchor scales
+and ratios on each, and the head width it was built with, so a head keeps loading if those
+defaults ever move. That file carries its own `formatVersion`: version 1, written before
+0.6.1, describes one 7x7 map in `rows`, `cols`, `scales` and `ratios`, and still loads and
+still answers exactly what it used to. Version 2 adds a `featureScales` list and keeps the
+version 1 fields filled in with the coarse map. Nothing retrains itself on upgrade; a
+version 1 head keeps reading the coarse map until the project is trained again.
 
 Detect projects are created with different training settings, because a detection head
 sees hundreds of anchors per picture instead of one embedding: 150 epochs, batches of 8, a
@@ -425,6 +453,7 @@ npm run eval:real         # train and score on real COCO photographs
 
 ```bash
 npm run eval:real                  # train and score, using the cached data
+npm run eval:real -- --repeat 5    # average over five seeds instead of three
 npm run eval:real -- --no-augment  # the same run without mirrored copies
 npm run eval:real -- --keep-last   # keep the last epoch instead of the best one
 npm run eval:real -- --rebuild     # rebuild the image list from the COCO annotations
@@ -437,8 +466,8 @@ broken, never because the score was low.
 **Method.** `scripts/data/coco-subset.json` is a committed list of 169 COCO val2017
 photographs across `person`, `cat` and `dog`, with the human drawn boxes that come with
 them. No image data is committed. The classes were not chosen by hand: the rebuild ranks
-every COCO class by how many photographs it carries whose objects are large enough for a
-7x7 grid to place, and takes the top three. A photograph qualifies only when every instance
+every COCO class by how many photographs it carries whose objects are large enough for the
+grid to place, and takes the top three. A photograph qualifies only when every instance
 of every chosen class in it can be labelled honestly: at least one box covers 15 percent of
 the cropped frame, no box is smaller than 5 percent, none was cut by more than 40 percent by
 the square crop, none fills more than 92 percent of an edge, none is a crowd region, and
@@ -449,67 +478,90 @@ the app converts an import: center cropped to a square, resized to 224, boxes mo
 Every fifth photograph is held out. Training goes through `trainDetector` with the settings
 a new detect project is created with.
 
-**Numbers, measured on this machine at 0.6.0**, 136 training photographs, 33 held out, 215
-boxes, score threshold 0.3, IoU 0.5:
+**One run is not a measurement.** On 136 photographs the head reaches its best holdout loss
+within a handful of epochs and then overfits, so which epoch early stopping keeps, and
+therefore what the run scores, moves by up to eight points with nothing changed but the
+weight initialization. The tool trains at three fixed seeds by default and `--repeat 5`
+uses five; the numbers below are means over the same five seeds on both sides.
+
+**What the second feature map is worth**, 136 training photographs, 33 held out, 215 boxes,
+score threshold 0.3, IoU 0.5, mean of five seeded runs:
+
+| | found | right | mean overlap | seconds per run |
+| --- | --- | --- | --- | --- |
+| 0.6.0, one 7x7 map, 294 anchors | 44.5% | 41.5% | 0.664 | 13.7 |
+| **0.6.1, 7x7 and 14x14, 1470 anchors** | **56.5%** | **48.7%** | **0.676** | 36.9 |
+
+The second map is worth twelve points of recall and seven of precision, and it costs 2.7
+times the training time and three times the feature cache. The gain in mean overlap looks
+small at 0.012 and is understated, because mean overlap is measured only over the boxes
+that already count as found: raising recall by twelve points adds a tail of marginal boxes
+just over the 0.5 bar and drags the average down. On the single seed the tables below are
+printed from it moves from 0.624 to 0.684.
+
+**The detailed run, seed 913**, which is what `npm run eval:real` prints first:
 
 | | found | right | mean overlap |
 | --- | --- | --- | --- |
-| person | 80% (8/10) | 67% (8/12) | |
-| cat | 44% (7/16) | 44% (7/16) | |
-| dog | 29% (4/14) | 36% (4/11) | |
-| **held out overall** | **48%** (19/40) | **49%** (19/39) | **0.62** |
-| the pictures it trained on | 79% | 72% | 0.73 |
+| person | 70% (7/10) | 70% (7/10) | |
+| cat | 50% (8/16) | 50% (8/16) | |
+| dog | 43% (6/14) | 35% (6/17) | |
+| **held out overall** | **53%** (21/40) | **49%** (21/43) | **0.684** |
+| the pictures it trained on | 86% | 87% | 0.763 |
 
-That is weak, and it is worth saying plainly rather than burying: on real photographs this
-detector finds about half of what a person drew, and about half of what it reports is real.
-The synthetic proof's 80 percent and 89 percent do not transfer. Four reasons, in the order
-they matter:
+That is still weak, and it is worth saying plainly rather than burying: on real photographs
+this detector finds a little over half of what a person drew, and about half of what it
+reports is real. The synthetic proof's 98 percent and 100 percent do not transfer. Three
+reasons, in the order they matter:
 
-- **A 7x7 grid over a 224 pixel frame.** Boxes are placed from 294 anchors on a 32 pixel
-  stride. Looking at the sample renders, most failures are not the detector missing the
-  animal: it is a box on the right animal that is 20 percent too small or shifted by a
-  cell, which scores zero at IoU 0.5 and looks fine to a person. Mean overlap of the boxes
-  it does get right is 0.62, only just above the bar.
-- **One scale of features.** A real SSD reads several feature maps at different depths. This
-  head reads one, so a cat filling the frame and a dog a third of its size have to be found
-  by the same six anchor shapes.
-- **136 photographs.** The holdout loss turns upward after the second epoch and never comes
+- **136 photographs.** The holdout loss turns upward after the third epoch and never comes
   back down. There is not enough data here for the head to learn the idea rather than the
-  pictures, which is exactly what the Train view now says out loud.
+  pictures, which is exactly what the Train view now says out loud. This is now clearly the
+  binding constraint: it is why the seed matters as much as it does, and it is why the
+  second feature map bought twelve points rather than thirty.
+- **Still a coarse frame.** 1470 anchors on a 16 pixel stride is a great deal better than
+  294 on a 32 pixel one, and the sample renders show it: a box that used to sit a cell off
+  the cat now tracks the drawn box closely. What is left over is mostly label confusion
+  rather than placement, a cat box and a dog box on the same animal, which per label
+  suppression cannot merge by construction.
 - **COCO is harder than a kitchen table.** Low light, black cats on dark sofas, animals
   half behind furniture, several people at different depths. A user photographing one
   object on their own desk from a few angles is a much easier problem than this, which is
   the case Belo is actually for.
 
-**What the two new training changes are worth here**, same seed, same holdout:
+**What the other training choices are worth here**, five seeds each unless noted:
 
-| | found | right | mean overlap | epochs |
+| | found | right | mean overlap | seconds |
 | --- | --- | --- | --- | --- |
-| originals only | 43% | 40% | 0.635 | 13, kept 3 |
-| plus mirrored copies | 48% | 49% | 0.624 | 12, kept 2 |
-| keeping the last epoch instead of the best | 53% | 40% | 0.620 | 150, kept 150 |
+| originals only | 54.5% | 49.8% | 0.665 | 21.7 |
+| plus mirrored copies | 56.5% | 48.7% | 0.676 | 36.9 |
+| keeping the last epoch instead of the best, one seed | 60% | 33% | 0.628 | 402.7 |
 
-Mirrored copies are worth about five points of recall and nine of precision on real
-photographs. On the synthetic set in `check:learning` they are close to a wash, minus two
-points of recall for plus four of precision, which makes sense: those shapes are symmetric
-and their backgrounds are random noise, so a mirror tells the head almost nothing it did
-not already have.
+Mirrored copies were worth about five points of recall and nine of precision on the one map
+head. On the two map head they are close to a wash, two points of recall for one of
+precision, at double the reading time: the finer grid appears to have supplied the same
+invariance the mirror was buying. They stay on by default because they still help on the
+small, one-object projects Belo is actually for, but this is now a defensible toggle to
+switch off on a large project. On the synthetic set in `check:learning` they were always
+close to a wash, which makes sense: those shapes are symmetric and their backgrounds are
+random noise, so a mirror tells the head almost nothing it did not already have.
 
-Early stopping is a trade rather than a free win: keeping the best epoch gives up five
-points of recall and gains nine of precision, and turns a 165 second run into a 13 second
-one. Sweeping fixed run lengths on the same data shows why the loss based choice is sound:
-recall sits between 45 and 53 percent at every length from 2 to 150 epochs, while precision
-falls steadily from 49 percent at epoch 2 to 34 percent at epoch 80. There is nothing after
-the first few epochs but memorization, and the holdout loss says so at the time.
+Early stopping is a trade rather than a free win, and a starker one on the two map head:
+keeping the best epoch gives up seven points of recall and gains sixteen of precision, and
+turns a 403 second run into a 37 second one. There is nothing after the first few epochs
+but memorization, and the holdout loss says so at the time.
 
 **Sample renders.** Every run writes side by side PNGs to `/tmp/belo-eval-real`, the human
 boxes on the left in green and what Belo read on the right in pink, named after what went
-wrong in each. They are worth looking at, because they say something the table cannot: a
-child under a blue umbrella and a cat curled in a bathroom sink come back with tight,
-correct boxes, while two cats sprawled across a pink couch come back with three boxes that
-sit on the cats but cover two thirds of each of them, and a black cat on a dark striped sofa
-is missed completely. The failures are mostly failures of box precision and of low contrast,
-not of recognition.
+wrong in each. They are worth looking at, because they say something the table cannot. On
+the same photographs at 0.6.0 and 0.6.1: a cat curled in a bathroom sink used to come back
+with a box shifted right and down, clipping the tail, and now comes back with one whose
+edges sit on the drawn box; a child under a blue umbrella used to lose a shoulder to a box
+too narrow, and now keeps it. What is left is a different failure. A cat standing in a sink
+now gets a well placed box and a second, near identical one next to it, because the two
+carry different labels and suppression runs per label; and a black cat on a dark striped
+sofa is still missed completely. The failures have moved from placement to naming and to
+low contrast.
 
 ### Continuous integration
 
@@ -524,8 +576,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.6.0 && git push origin
-v0.6.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.6.1 && git push origin
+v0.6.1`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -538,10 +590,13 @@ Useful extras:
 - `npm run check:boxes` runs the detect mode box seam: drawing in every direction, moving
   against the edges of the picture, all eight resize grips, and a save and reopen round
   trip of version 1, 2 and 3 manifests.
-- `npm run check:detect` runs the detection decision layer: anchor generation and layout,
-  overlap, offset encode and decode round trips, anchor matching including the forced best
-  match, cell standardizing, hard negative mining, suppression and the precision and recall
-  matcher. No TensorFlow, no DOM.
+- `npm run check:detect` runs the detection decision layer: anchor generation and layout
+  across both feature maps, overlap, offset encode and decode round trips, anchor matching
+  including the forced best match, cell standardizing per map depth, hard negative mining,
+  suppression and the precision and recall matcher. It pins the claims the two map layout
+  rests on: the maps are joined coarse first, a one map head's anchors are exactly the
+  prefix of a two map head's, and a head that wants one map reads the prefix of a packed
+  example and ignores the rest. No TensorFlow, no DOM.
 - `npm run check:store` uses an in-memory storage double to prove box edits persist the
   stale-model flag, overlapping manifest writes serialize in order and Close flushes the latest
   box deletion. It uses only a fake `/tmp` handle and never opens a real project.
@@ -554,18 +609,22 @@ Useful extras:
   detect project of 64 pictures with coloured shapes at known positions, extracts real
   features with the bundled MobileNet on the WASM backend, trains the head with the
   settings a new detect project is created with, mirrored copies included, and then
-  measures on 24 pictures it never saw. The run is seeded. It currently finds 80 percent of
-  the held out boxes with 89 percent of its detections right and a mean overlap of 0.68,
-  against 100 percent on the pictures it trained on. It also rebuilds each held out spatial
-  map as the tensor handed to the Use view, runs the exact Use inference seam and checks
-  both placement and tensor cleanup; 21 of 24 frames contain a correctly placed box at half
-  overlap. Two further parts check the pixel transform against a hand written probe tensor,
-  and prove early stopping restores the best epoch: the holdout loss recomputed from the
+  measures on 24 pictures it never saw. The run is seeded. It currently finds 98 percent of
+  the held out boxes with 100 percent of its detections right and a mean overlap of 0.85,
+  against 99 percent on the pictures it trained on; at 0.6.0, on one feature map, those
+  numbers were 80 percent, 89 percent and 0.68, which is why the pass bars were raised with
+  the second map. It also rebuilds each held out example as the packed tensor handed to the
+  Use view, runs the exact Use inference seam and checks both placement and tensor cleanup;
+  all 24 frames contain a correctly placed box at half overlap. A further part saves and
+  reloads the head in both stored formats, and proves a format 1 file, one 7x7 map and six
+  weight tensors, still loads and still reads exactly the boxes it used to off the packed
+  features. Two more check the pixel transform against a hand written probe tensor, and
+  prove early stopping restores the best epoch: the holdout loss recomputed from the
   returned weights has to equal the best loss the run recorded, and a deliberately
   overfitting run has to stop early and hand back weights that beat the ones it ended with.
-  It takes about fifteen seconds, and feature extraction is cached in the temp folder for
-  reruns. `--compare` additionally trains the same data without mirrored copies and prints
-  both, which doubles the runtime. Needs Node 22.15 or newer.
+  It takes about a minute, and feature extraction is cached in the temp folder for reruns.
+  `--compare` additionally trains the same data without mirrored copies and prints both,
+  which doubles the runtime. Needs Node 22.15 or newer.
 - `npm run eval:real` is the honest one. Everything above is either pure arithmetic or
   coloured rectangles on striped backgrounds; this trains the real detector on real
   photographs with boxes drawn by other people, and reports what it finds. See
