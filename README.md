@@ -117,7 +117,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.5.0**. Desktop and iOS are supported. Android is code-complete
+Current app version: **0.6.2**. Desktop and iOS are supported. Android is code-complete
 but has not yet been built on an Android toolchain.
 
 ## Detailed workflow
@@ -128,8 +128,8 @@ but has not yet been built on an Android toolchain.
    selection toggles several labels on and off instead of moving between them. In a detect
    project a click opens the picture large instead, and you drag rectangles onto it: the
    label rail picks the color you draw with, boxes can be moved, resized by their eight
-   grips and deleted, and the thumbnails show the boxes with a count so progress is
-   readable from the grid. The grid
+   grips, retagged and deleted, every one of those can be undone with cmd or ctrl + z, and
+   the thumbnails show the boxes with a count so progress is readable from the grid. The grid
    uses uniform cells and shows every thumbnail whole rather than cropping it to a square,
    so a portrait frame is letterboxed instead of having its top and bottom cut off. The
    **minus and plus** buttons above the grid pick one of four cell sizes, which changes how
@@ -198,10 +198,37 @@ UI interactive, and shows a small "retraining" marker in the header while it wor
 live camera keeps classifying with the current model until the new one is ready. If a
 manual training run is going, the automatic one waits for it and then retries.
 
-Before each automatic run the current head is copied to `model/head.prev.json`. The Train
-view then offers **Revert to previous model**, which puts that head back, writes it to
-`model/head.json` and drops the checkpoint. Manual training runs do not write a
-checkpoint, so the action always means "undo what the app did on its own".
+A detect project has no live corrections to fold in, so the trigger there is the dataset
+itself: a box drawn, moved, resized, retagged, removed or undone, and pictures added or
+deleted. The same four second debounce applies, so a session of annotating produces one
+run after the last change rather than one per box, and a run is never started in the
+middle of a drag because only a committed change schedules one. Early stopping and the
+mirrored copies work exactly as they do in a manual run. Nothing is scheduled at all until
+the project has boxes on the ten pictures a detect run needs, which keeps the first ten
+from each arming a run that would only refuse itself.
+
+Before each automatic run the current model is copied aside: a classifier head to
+`model/head.prev.json`, a detector to `model/detect.prev.json`. The Train view then offers
+**Revert to previous model**, which puts those weights back byte for byte, writes them to
+`model/head.json` or `model/detect.json`, restores the metadata that described them and
+drops the checkpoint. Manual training runs do not write a checkpoint, so the action always
+means "undo what the app did on its own". A bundle from before checkpoints existed simply
+has no such file and never offers the action.
+
+## Undo in the annotator
+
+The box annotator keeps an undo history per picture: **cmd or ctrl + z** steps back,
+adding **shift** steps forward again, and the two arrows in the annotator bar do the same
+thing with the mouse and grey out when there is nothing to go back to. Drawing, moving,
+resizing, deleting and retagging a box are all covered, up to 24 steps per picture.
+
+Each step is a snapshot of the whole box list rather than an inverse edit, so what comes
+back is the numbers that were stored and not the result of running a drag backwards. A
+drag that ends where it started, or a label picked twice, changes nothing and costs no
+step. The history is session state: it lives while the annotator is open, one stack per
+picture, and closing it clears everything, because the boxes on disk are the truth. An
+undo counts as a change to the dataset, so it schedules the same background retrain any
+other edit would.
 
 ## How the model works
 
@@ -320,6 +347,7 @@ Shapes.belo/
     head.json         serialized dense head weights, written after a training run
     head.prev.json    checkpoint of the head replaced by the last automatic retrain
     detect.json       serialized detection head, detect projects only
+    detect.prev.json  checkpoint of the detector replaced by the last automatic retrain
 ```
 
 `project.json`:
@@ -328,7 +356,7 @@ Shapes.belo/
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.5.0",
+  "appVersion": "0.6.2",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -370,6 +398,7 @@ Shapes.belo/
     "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15, "augment": false }
   },
   "checkpoint": null,            // same shape as model, describes head.prev.json
+                                 // or, in a detect project, detect.prev.json
   "modelStale": false,           // true when data changed after this model trained
   // augment is detect only and inert elsewhere: mirrored, slightly relit copies
   "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15, "augment": false }
@@ -438,7 +467,7 @@ each one took, which is exactly what CI does:
 npm run check:boxes       # manifest v3 and one-finger box geometry
 npm run check:detect      # anchors, loss inputs, decoding, scoring and flip geometry
 npm run check:curve       # which epoch a run keeps and what it tells you afterwards
-npm run check:store       # stale-model persistence and serialized manifest saves
+npm run check:store       # stale-model persistence, saves, retrain policy, checkpoint, undo
 npm run check:camera      # live camera switching seam
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
@@ -576,8 +605,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.6.1 && git push origin
-v0.6.1`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.6.2 && git push origin
+v0.6.2`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:

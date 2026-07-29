@@ -69,7 +69,7 @@ import {
   type TrainProgress,
 } from "./ml/classifier";
 
-export const APP_VERSION = "0.6.0";
+export const APP_VERSION = "0.6.2";
 
 export type View = "label" | "train" | "use";
 
