@@ -35,6 +35,13 @@ const {
   GRID_ROWS,
 } = await import(new URL("../src/lib/detect.ts", import.meta.url));
 
+// Flipping is geometry too, and getting it wrong is the classic silent bug: the
+// pixels mirror, the boxes do not, and the head learns that the object is on
+// the other side of the picture from where it is.
+const { augmentFor, flipBoxes, flipRect, NO_AUGMENT, VARIANTS } = await import(
+  new URL("../src/lib/augment.ts", import.meta.url)
+);
+
 let failures = 0;
 const results = [];
 
@@ -426,6 +433,105 @@ check(
     ]);
     return many.hits[1] === 0 && many.hits[0] === -1;
   })(),
+);
+
+// ---------- Flip geometry ----------
+
+const leftBox = { x: 0.1, y: 0.3, w: 0.2, h: 0.4 };
+const flipped = flipRect(leftBox);
+check(
+  "a box near the left edge lands the same distance from the right",
+  near(flipped.x, 0.7) && near(flipped.w, 0.2),
+  `x ${flipped.x}, w ${flipped.w}`,
+);
+check(
+  "flipping changes nothing vertically",
+  near(flipped.y, leftBox.y) && near(flipped.h, leftBox.h),
+);
+check(
+  "flipping twice gives back the original box",
+  (() => {
+    const back = flipRect(flipped);
+    return near(back.x, leftBox.x) && near(back.w, leftBox.w);
+  })(),
+);
+check(
+  "a centered box is its own mirror",
+  (() => {
+    const centered = flipRect({ x: 0.4, y: 0.1, w: 0.2, h: 0.2 });
+    return near(centered.x, 0.4) && near(centered.w, 0.2);
+  })(),
+);
+check(
+  "a flipped box stays inside the picture",
+  [
+    { x: 0, y: 0, w: 1, h: 1 },
+    { x: 0, y: 0.5, w: 0.05, h: 0.05 },
+    { x: 0.95, y: 0.5, w: 0.05, h: 0.05 },
+  ].every((rect) => {
+    const out = flipRect(rect);
+    return out.x >= -1e-12 && out.x + out.w <= 1 + 1e-12;
+  }),
+);
+check(
+  "flipping a list keeps every label on its own box",
+  (() => {
+    const boxes = flipBoxes([
+      { labelId: "lbl_a", x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+      { labelId: "lbl_b", x: 0.6, y: 0.1, w: 0.1, h: 0.3 },
+    ]);
+    return (
+      boxes[0].labelId === "lbl_a" &&
+      near(boxes[0].x, 0.7) &&
+      boxes[1].labelId === "lbl_b" &&
+      near(boxes[1].x, 0.3)
+    );
+  })(),
+);
+check(
+  "overlap is preserved by a flip, so anchor matching sees the same picture",
+  (() => {
+    const a = { x: 0.1, y: 0.2, w: 0.3, h: 0.3 };
+    const b = { x: 0.2, y: 0.25, w: 0.3, h: 0.3 };
+    return near(iou(a, b), iou(flipRect(a), flipRect(b)), 1e-12);
+  })(),
+);
+
+// ---------- Augmentation plan ----------
+
+check("variant 0 is the picture as it was stored", augmentFor("img_1", 0) === NO_AUGMENT);
+check(
+  "an augmented variant is always mirrored",
+  augmentFor("img_1", 1).flip && augmentFor("img_2", 1).flip,
+);
+check(
+  "the same picture always gets the same variant",
+  (() => {
+    const a = augmentFor("img_seed", 1);
+    const b = augmentFor("img_seed", 1);
+    return a.brightness === b.brightness && a.saturation === b.saturation;
+  })(),
+);
+check(
+  "different pictures get different light",
+  new Set(
+    Array.from({ length: 20 }, (_, i) => augmentFor(`img_${i}`, 1).brightness.toFixed(6)),
+  ).size > 15,
+);
+check(
+  "the jitter stays inside bounds that keep a colour a colour",
+  Array.from({ length: 200 }, (_, i) => augmentFor(`img_${i}`, 1)).every(
+    (aug) =>
+      aug.brightness >= 0.85 &&
+      aug.brightness <= 1.18 &&
+      aug.saturation >= 0.7 &&
+      aug.saturation <= 1.3,
+  ),
+);
+check(
+  "one variant per picture, so a run holds twice the features and not five times",
+  VARIANTS === 1,
+  `${VARIANTS}`,
 );
 
 console.log(results.join("\n"));

@@ -71,11 +71,22 @@ const rng = mulberry32(20260728);
 // Weight initialization and batch shuffling both draw from here too.
 Math.random = rng;
 
-const { detect, detectSpatialMap, trainDetector } = await import(
+const { detect, detectSpatialMap, evaluateDetector, trainDetector } = await import(
   new URL("../src/lib/ml/detector.ts", import.meta.url),
 );
 const { matchDetections, iou } = await import(new URL("../src/lib/detect.ts", import.meta.url));
 const { DETECT_SETTINGS } = await import(new URL("../src/lib/types.ts", import.meta.url));
+const { augmentFor, flipBoxes, NO_AUGMENT } = await import(
+  new URL("../src/lib/augment.ts", import.meta.url),
+);
+const { applyAugment } = await import(new URL("../src/lib/ml/features.ts", import.meta.url));
+const { PATIENCE } = await import(new URL("../src/lib/curve.ts", import.meta.url));
+
+// Training with the mirrored copies is what a new detect project does, so it is
+// what this proof measures. `--compare` additionally runs the same dataset with
+// augmentation off and prints both, which is where the numbers in the README
+// come from. It doubles the runtime, so it is not what CI runs.
+const COMPARE = process.argv.includes("--compare");
 
 // ---------- The bundled extractor, loaded straight off disk ----------
 
@@ -263,13 +274,83 @@ Math.random = datasetRandom;
 const full = await tf.loadLayersModel(fileHandler(MODEL_PATH));
 const extractor = tf.model({ inputs: full.inputs, outputs: full.getLayer("conv_pw_13_relu").output });
 
-/** Exactly what features.ts does: scale into -1..1, cut at conv_pw_13_relu. */
-function featuresFor(pixels) {
+/**
+ * Exactly what features.ts does: augment the pixels, scale into -1..1, cut at
+ * conv_pw_13_relu. The synthetic painter works in 0..1 and the app works in
+ * 0..255, so the pixels are scaled up before applyAugment sees them and the
+ * transform here is the one the app applies, not an approximation of it.
+ */
+function featuresFor(pixels, aug = NO_AUGMENT) {
   return tf.tidy(() => {
-    const input = tf.tensor4d(pixels, [1, SIZE, SIZE, 3]).mul(2).sub(1);
+    const raw = tf.tensor3d(pixels, [SIZE, SIZE, 3]).mul(255);
+    const varied = applyAugment(raw, aug);
+    const input = varied.div(127.5).sub(1).expandDims(0);
     const activation = extractor.predict(input);
     return activation.reshape([49 * 1024]).dataSync().slice();
   });
+}
+
+// ---------- The pixel transform itself ----------
+//
+// The flip has to be a real mirror of the picture and the jitter has to stay in
+// range, because a head trained on a picture that is not what it thinks it is
+// learns the wrong thing quietly.
+
+{
+  const probe = tf.tensor3d(
+    [
+      [
+        [10, 20, 30],
+        [200, 100, 50],
+      ],
+      [
+        [0, 0, 0],
+        [255, 255, 255],
+      ],
+    ],
+    [2, 2, 3],
+  );
+  const mirrored = applyAugment(probe, { flip: true, brightness: 1, saturation: 1 });
+  const rows = mirrored.arraySync();
+  check(
+    "a flip swaps the columns and leaves the rows alone",
+    rows[0][0].join() === "200,100,50" &&
+      rows[0][1].join() === "10,20,30" &&
+      rows[1][0].join() === "255,255,255",
+    JSON.stringify(rows[0]),
+  );
+  const bright = applyAugment(probe, { flip: false, brightness: 1.5, saturation: 1 });
+  const brightRows = bright.arraySync();
+  check(
+    "brightness scales every channel and clamps at white",
+    brightRows[0][0].join() === "15,30,45" && brightRows[1][1].join() === "255,255,255",
+    JSON.stringify(brightRows[1][1]),
+  );
+  const grey = applyAugment(probe, { flip: false, brightness: 1, saturation: 0 });
+  const greyRows = grey.arraySync();
+  check(
+    "zero saturation collapses a pixel onto its own grey",
+    greyRows[0][0].every((value) => Math.abs(value - greyRows[0][0][0]) < 1e-4) &&
+      Math.abs(greyRows[0][0][0] - (10 * 0.299 + 20 * 0.587 + 30 * 0.114)) < 1e-3,
+    JSON.stringify(greyRows[0][0]),
+  );
+  check(
+    "an untouched picture comes back untouched",
+    tf.tidy(
+      () => applyAugment(probe, NO_AUGMENT).sub(probe).abs().max().dataSync()[0] === 0,
+    ),
+  );
+  const before = tf.memory().numTensors;
+  applyAugment(probe, augmentFor("probe", 1)).dispose();
+  check(
+    "augmenting leaves nothing behind",
+    tf.memory().numTensors === before,
+    `tensor delta ${tf.memory().numTensors - before}`,
+  );
+  probe.dispose();
+  mirrored.dispose();
+  bright.dispose();
+  grey.dispose();
 }
 
 // The dataset is fully determined by this file, so the extracted features are
@@ -281,22 +362,32 @@ const cacheFile = join(tmpdir(), `belo-learning-${stamp.slice(0, 12)}.json`);
 
 const started = Date.now();
 const pictures = [];
+const decode = (text) => new Float32Array(Buffer.from(text, "base64").buffer.slice(0));
+const encode = (array) => Buffer.from(array.buffer).toString("base64");
 if (existsSync(cacheFile)) {
   const cached = JSON.parse(readFileSync(cacheFile, "utf8"));
   for (const entry of cached) {
     pictures.push({
       imageId: entry.imageId,
-      features: new Float32Array(Buffer.from(entry.features, "base64").buffer.slice(0)),
+      features: decode(entry.features),
       boxes: entry.boxes,
+      mirrored: decode(entry.mirrored),
+      mirroredBoxes: entry.mirroredBoxes,
     });
   }
 } else {
   for (let i = 0; i < TRAIN_IMAGES + HOLDOUT_IMAGES; i += 1) {
+    const imageId = `img_${i}`;
     const picture = makePicture(rng);
+    // The same picture as the store would hand training: the original, and the
+    // one augmented copy augmentFor picks for this image id.
+    const aug = augmentFor(imageId, 1);
     pictures.push({
-      imageId: `img_${i}`,
+      imageId,
       features: new Float32Array(featuresFor(picture.pixels)),
       boxes: picture.boxes,
+      mirrored: new Float32Array(featuresFor(picture.pixels, aug)),
+      mirroredBoxes: flipBoxes(picture.boxes),
     });
   }
   writeFileSync(
@@ -304,8 +395,10 @@ if (existsSync(cacheFile)) {
     JSON.stringify(
       pictures.map((p) => ({
         imageId: p.imageId,
-        features: Buffer.from(p.features.buffer).toString("base64"),
+        features: encode(p.features),
         boxes: p.boxes,
+        mirrored: encode(p.mirrored),
+        mirroredBoxes: p.mirroredBoxes,
       })),
     ),
   );
@@ -315,7 +408,18 @@ const readMs = Date.now() - started;
 // the training run that follows is the same one either way.
 Math.random = mulberry32(913);
 
-const samples = pictures.slice(0, TRAIN_IMAGES);
+const originals = pictures.slice(0, TRAIN_IMAGES);
+// What the store builds when "practise on mirrored copies" is on: the original
+// picture and its augmented variant, each with its own boxes.
+const augmented = originals.flatMap((picture) => [
+  picture,
+  {
+    imageId: `${picture.imageId}#1`,
+    features: picture.mirrored,
+    boxes: picture.mirroredBoxes,
+  },
+]);
+const samples = DETECT_SETTINGS.augment ? augmented : originals;
 const holdout = pictures.slice(TRAIN_IMAGES);
 const drawn = pictures.reduce((sum, p) => sum + p.boxes.length, 0);
 console.log(
@@ -327,8 +431,14 @@ console.log(
     `for ${pictures.length} pictures, ${(pictures[0].features.byteLength / 1024).toFixed(0)} KB each`,
 );
 
+console.log(
+  `training on ${samples.length} examples (${originals.length} pictures` +
+    `${DETECT_SETTINGS.augment ? ` plus ${samples.length - originals.length} mirrored copies` : ""}), ` +
+    `holding out ${holdout.length}`,
+);
+
 const trainStarted = Date.now();
-const { detector, history } = await trainDetector({
+const { detector, history, bestEpoch, bestValLoss, stoppedEarly } = await trainDetector({
   samples,
   validation: holdout,
   labelIds: LABELS,
@@ -344,13 +454,46 @@ const { detector, history } = await trainDetector({
     }
   },
 });
-console.log(`trained ${history.length} epochs in ${((Date.now() - trainStarted) / 1000).toFixed(1)}s`);
+console.log(
+  `trained ${history.length} epochs in ${((Date.now() - trainStarted) / 1000).toFixed(1)}s, ` +
+    `kept epoch ${bestEpoch ?? history.length}${stoppedEarly ? " and stopped early" : ""}`,
+);
 
-function evaluate(set, options = {}) {
+// ---------- Early stopping ----------
+//
+// The claim is exact and worth checking exactly: the detector handed back is
+// the one from the best epoch, not the one from the last. Its holdout loss,
+// recomputed from the returned weights with the same batching the training loop
+// used, must be the best loss the run recorded.
+
+const restoredLoss = evaluateDetector(detector, holdout, DETECT_SETTINGS.batchSize);
+check(
+  "the run reports which epoch it kept",
+  bestEpoch !== null && bestEpoch >= 1 && bestEpoch <= history.length,
+  `epoch ${bestEpoch} of ${history.length}`,
+);
+check(
+  "the kept epoch is the best epoch on the held out pictures",
+  bestEpoch !== null && history[bestEpoch - 1].valLoss === bestValLoss,
+  `reported ${bestValLoss?.toFixed(6)}, epoch ${bestEpoch} recorded ${history[(bestEpoch ?? 1) - 1]?.valLoss?.toFixed(6)}`,
+);
+check(
+  "the weights handed back are the ones from that epoch",
+  restoredLoss !== null && Math.abs(restoredLoss - bestValLoss) < 1e-5,
+  `restored ${restoredLoss?.toFixed(6)} against best ${bestValLoss?.toFixed(6)}, ` +
+    `last epoch was ${history[history.length - 1].valLoss.toFixed(6)}`,
+);
+check(
+  "stopping early never happens before patience is out",
+  !stoppedEarly || history.length - bestEpoch >= PATIENCE,
+  `${history.length - (bestEpoch ?? 0)} epochs after the best one`,
+);
+
+function evaluateWith(model, set, options = {}) {
   const stats = new Map(LABELS.map((id) => [id, { truth: 0, found: 0, predicted: 0, hit: 0 }]));
   const overlaps = [];
   for (const picture of set) {
-    const detections = detect(detector, picture.features, options);
+    const detections = detect(model, picture.features, options);
     const matched = matchDetections(picture.boxes, detections, 0.5);
     for (const box of picture.boxes) stats.get(box.labelId).truth += 1;
     detections.forEach((detection, i) => {
@@ -365,6 +508,27 @@ function evaluate(set, options = {}) {
   }
   const meanIoU = overlaps.length === 0 ? 0 : overlaps.reduce((a, b) => a + b, 0) / overlaps.length;
   return { stats, meanIoU, matches: overlaps.length };
+}
+
+function evaluate(set, options = {}) {
+  return evaluateWith(detector, set, options);
+}
+
+/** Overall recall, precision and overlap of one scored set, as three numbers. */
+function overall(score) {
+  let truth = 0;
+  let found = 0;
+  let predicted = 0;
+  for (const stat of score.stats.values()) {
+    truth += stat.truth;
+    found += stat.found;
+    predicted += stat.predicted;
+  }
+  return {
+    recall: truth === 0 ? 0 : found / truth,
+    precision: predicted === 0 ? 0 : found / predicted,
+    meanIoU: score.meanIoU,
+  };
 }
 
 const trainScore = evaluate(samples);
@@ -496,6 +660,78 @@ check(
     return detect(detector, empty).length === 0;
   })(),
 );
+
+// ---------- Early stopping, forced ----------
+//
+// The run above may well improve until its last epoch, in which case keeping
+// the best epoch and keeping the last are the same thing and nothing was
+// proven. This one is built to overfit: three pictures, a large step size and
+// far more epochs than they can absorb. The holdout loss has to turn around,
+// patience has to run out, and the weights that come back have to be the ones
+// from before the turn.
+
+const overfitSettings = { ...DETECT_SETTINGS, epochs: 120, learningRate: 0.02, batchSize: 2 };
+Math.random = mulberry32(4711);
+const forced = await trainDetector({
+  samples: originals.slice(0, 3),
+  validation: holdout.slice(0, 8),
+  labelIds: LABELS,
+  settings: overfitSettings,
+  patience: 6,
+});
+const forcedLoss = evaluateDetector(forced.detector, holdout.slice(0, 8), overfitSettings.batchSize);
+console.log(
+  `\nforced overfit run: ${forced.history.length} of ${overfitSettings.epochs} epochs, ` +
+    `kept epoch ${forced.bestEpoch}, holdout loss ${forced.bestValLoss?.toFixed(4)} ` +
+    `against ${forced.history[forced.history.length - 1].valLoss.toFixed(4)} at the end`,
+);
+check(
+  "a run that stops improving gives up before its epochs are spent",
+  forced.stoppedEarly && forced.history.length < overfitSettings.epochs,
+  `${forced.history.length} of ${overfitSettings.epochs} epochs`,
+);
+check(
+  "the epoch it keeps is not the epoch it ended on",
+  forced.bestEpoch !== null && forced.bestEpoch < forced.history.length,
+  `kept ${forced.bestEpoch} of ${forced.history.length}`,
+);
+check(
+  "the restored weights beat the ones the run ended with",
+  forcedLoss !== null &&
+    Math.abs(forcedLoss - forced.bestValLoss) < 1e-5 &&
+    forcedLoss < forced.history[forced.history.length - 1].valLoss,
+  `restored ${forcedLoss?.toFixed(4)} against final ${forced.history[forced.history.length - 1].valLoss.toFixed(4)}`,
+);
+forced.detector.model.dispose();
+
+// ---------- What the mirrored copies are worth ----------
+
+if (COMPARE) {
+  const withAugmentation = overall(score);
+  Math.random = mulberry32(913);
+  const plain = await trainDetector({
+    samples: originals,
+    validation: holdout,
+    labelIds: LABELS,
+    settings: { ...DETECT_SETTINGS, augment: false },
+  });
+  const without = overall(evaluateWith(plain.detector, holdout));
+  console.log("\naugmentation, same seed, same holdout, IoU 0.5");
+  const row = (name, numbers, epochs) =>
+    console.log(
+      `  ${name.padEnd(16)} recall ${(numbers.recall * 100).toFixed(0)}%  ` +
+        `precision ${(numbers.precision * 100).toFixed(0)}%  ` +
+        `mean IoU ${numbers.meanIoU.toFixed(3)}  kept epoch ${epochs}`,
+    );
+  row("originals only", without, `${plain.bestEpoch} of ${plain.history.length}`);
+  row("plus mirrored", withAugmentation, `${bestEpoch} of ${history.length}`);
+  console.log(
+    `  difference       recall ${((withAugmentation.recall - without.recall) * 100).toFixed(0)} points  ` +
+      `precision ${((withAugmentation.precision - without.precision) * 100).toFixed(0)} points  ` +
+      `mean IoU ${(withAugmentation.meanIoU - without.meanIoU).toFixed(3)}`,
+  );
+  plain.detector.model.dispose();
+}
 
 console.log(results.join("\n"));
 console.log(failures === 0 ? "\nthe detector learns" : `\n${failures} check(s) failed`);
