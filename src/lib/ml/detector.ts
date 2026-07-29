@@ -33,6 +33,7 @@
 
 import * as tf from "@tensorflow/tfjs";
 import type { StoredDetector, TrainSettings } from "../types";
+import { bestEpochIndex, outOfPatience, PATIENCE } from "../curve";
 import { FEATURE_SIZE } from "./features";
 import {
   ANCHOR_RATIOS,
@@ -102,6 +103,8 @@ export interface DetectTrainInput {
   validation?: DetectSample[];
   labelIds: string[];
   settings: TrainSettings;
+  /** Epochs without a better holdout loss before the run gives up. */
+  patience?: number;
   onProgress?: (epoch: DetectEpoch) => void;
   shouldStop?: () => boolean;
 }
@@ -109,6 +112,14 @@ export interface DetectTrainInput {
 export interface DetectTrainResult {
   detector: Detector;
   history: DetectEpoch[];
+  /**
+   * Epoch whose weights the returned detector carries, 1 based. Null when there
+   * was no holdout to pick one with, in which case the run keeps the last.
+   */
+  bestEpoch: number | null;
+  bestValLoss: number | null;
+  /** True when patience ran out before the configured epochs did. */
+  stoppedEarly: boolean;
 }
 
 export function buildDetector(
@@ -334,6 +345,44 @@ function runBatch(
   return parts;
 }
 
+/** The head's weights as plain arrays, cheap enough to keep one copy of. */
+function snapshotWeights(model: tf.LayersModel): Float32Array[] {
+  return model.getWeights().map((w) => (w.dataSync() as Float32Array).slice());
+}
+
+function restoreWeights(model: tf.LayersModel, snapshot: Float32Array[]): void {
+  const shapes = model.getWeights().map((w) => w.shape.slice());
+  const tensors = snapshot.map((values, i) => tf.tensor(values, shapes[i]));
+  try {
+    model.setWeights(tensors);
+  } finally {
+    tensors.forEach((t) => t.dispose());
+  }
+}
+
+/**
+ * Mean loss of a detector over a set of pictures, with dropout off and no
+ * gradient. Same batching as the training loop's holdout pass, so the number it
+ * returns is the same number that pass reports, which is what lets
+ * scripts/check-learning.mjs prove the best epoch really was restored.
+ */
+export function evaluateDetector(
+  detector: Detector,
+  samples: DetectSample[],
+  batchSize = 8,
+): number | null {
+  if (samples.length === 0) return null;
+  const prepared = prepare(samples, detector, detector.labelIds);
+  const size = Math.max(1, Math.min(batchSize, prepared.length));
+  let sum = 0;
+  let batches = 0;
+  for (let start = 0; start < prepared.length; start += size) {
+    sum += runBatch(detector, prepared.slice(start, start + size), null).total;
+    batches += 1;
+  }
+  return batches === 0 ? null : sum / batches;
+}
+
 function shuffled(count: number): number[] {
   const order = Array.from({ length: count }, (_, i) => i);
   for (let i = order.length - 1; i > 0; i -= 1) {
@@ -355,6 +404,14 @@ export async function trainDetector(input: DetectTrainInput): Promise<DetectTrai
   const optimizer = tf.train.adam(settings.learningRate);
   const batchSize = Math.max(1, Math.min(settings.batchSize, prepared.length));
   const history: DetectEpoch[] = [];
+
+  // Early stopping bookkeeping. Only ever used when there is a holdout: without
+  // one there is no honest signal to pick an epoch by, and picking by training
+  // loss would reliably choose the most memorized head in the run.
+  let bestWeights: Float32Array[] | null = null;
+  let bestEpoch: number | null = null;
+  let bestValLoss: number | null = null;
+  let stoppedEarly = false;
 
   try {
     for (let epoch = 0; epoch < settings.epochs; epoch += 1) {
@@ -399,12 +456,31 @@ export async function trainDetector(input: DetectTrainInput): Promise<DetectTrai
       history.push(record);
       input.onProgress?.(record);
       await tf.nextFrame();
+
+      if (!validation) continue;
+      const holdout = history.map((entry) => entry.valLoss);
+      // bestEpochIndex is the same rule the Train view reads the curve with, so
+      // the epoch reported as kept is the epoch actually kept.
+      const best = bestEpochIndex(holdout);
+      if (best === history.length - 1) {
+        bestWeights = snapshotWeights(detector.model);
+        bestEpoch = record.epoch;
+        bestValLoss = record.valLoss;
+      }
+      if (outOfPatience(holdout, input.patience ?? PATIENCE)) {
+        stoppedEarly = true;
+        break;
+      }
     }
 
-    // The run keeps the weights it ends on. The holdout loss is reported
-    // because it is the honest number to show, but it is deliberately not used
-    // to pick an epoch: hard negative mining makes it a moving target.
-    return { detector, history };
+    // A run with a holdout keeps its best epoch rather than its last one. The
+    // last epoch is the most memorized head in the run by construction, and on
+    // a project of a few dozen pictures the difference is the whole game. A run
+    // without a holdout keeps what it ends on, exactly as before, because there
+    // is nothing to choose with.
+    if (bestWeights) restoreWeights(detector.model, bestWeights);
+
+    return { detector, history, bestEpoch, bestValLoss, stoppedEarly };
   } catch (err) {
     detector.model.dispose();
     throw err;
