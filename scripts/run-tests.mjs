@@ -21,6 +21,7 @@ const STEPS = [
   ["check:camera", "the camera seam behaves without a camera"],
   ["check:camera-live", "a real camera session switches devices and survives a removal"],
   ["check:overlay", "the multi label attention overlay paints what the model saw"],
+  ["check:export", "an exported model runs outside Belo and agrees with it"],
   ["check:store", "the project store saves and closes correctly"],
   ["check:learning", "the detector actually learns, on the real model"],
 ];
