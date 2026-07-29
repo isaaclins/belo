@@ -10,15 +10,18 @@
 import { useMemo, useState } from "react";
 import {
   BoundingBox,
+  Check,
   CheckCircle,
   Lightning,
+  Question,
   Sliders,
   Stop,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { useStore, type DetectVerdict } from "../lib/store";
+import { useStore, type DetectTrainState, type DetectVerdict } from "../lib/store";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { storage } from "../lib/storage";
+import { readCurves, type Verdict } from "../lib/curve";
 import {
   boxesOf,
   DETECT_MIN_IMAGES,
@@ -30,8 +33,13 @@ import type { DetectEpoch } from "../lib/ml/detector";
 
 type Filter = "all" | "clean" | "wrong";
 
+/** The settings that are numbers, so the number inputs cannot reach the toggle. */
+type NumberSetting = {
+  [K in keyof TrainSettings]: TrainSettings[K] extends number ? K : never;
+}[keyof TrainSettings];
+
 const NUMBER_FIELDS: {
-  key: keyof TrainSettings;
+  key: NumberSetting;
   label: string;
   min: number;
   max: number;
@@ -102,6 +110,52 @@ function LossCurve({ epochs }: { epochs: DetectEpoch[] }) {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The one panel in this view a person can read without knowing what a loss is.
+ *
+ * Everything else here reports numbers. This says what they mean and what to do
+ * about it, in the words someone who has never trained a model would use. The
+ * reading itself is pure and lives in lib/curve.ts, checked by
+ * scripts/check-curve.mjs, so the sentence shown here is a tested decision
+ * rather than a guess made in a render.
+ */
+function VerdictPanel({ detect }: { detect: DetectTrainState }) {
+  const verdict: Verdict = readCurves({
+    training: detect.epochs.map((epoch) => epoch.loss),
+    holdout: detect.epochs.map((epoch) => epoch.valLoss),
+    heldOut: detect.heldOut,
+  });
+  const icon =
+    verdict.tone === "good" ? (
+      <CheckCircle size={20} weight="bold" />
+    ) : verdict.tone === "unknown" ? (
+      <Question size={20} weight="bold" />
+    ) : (
+      <WarningCircle size={20} weight="bold" />
+    );
+  return (
+    <section className={`card verdict verdict--${verdict.tone}`}>
+      <div className="card__body stack">
+        <div className="verdict__head">
+          <span className="verdict__icon">{icon}</span>
+          <h3 className="verdict__headline">{verdict.headline}</h3>
+        </div>
+        <p className="verdict__advice">{verdict.advice}</p>
+        <p className="verdict__note">
+          {detect.bestEpoch === null
+            ? `Belo kept the last of ${detect.epochs.length} rounds of practice.`
+            : detect.stoppedEarly
+              ? `Belo stopped after ${detect.epochs.length} rounds because it had stopped getting better, and kept round ${detect.bestEpoch}, its best on the pictures it had never seen.`
+              : `Belo kept round ${detect.bestEpoch} of ${detect.epochs.length}, its best on the pictures it had never seen.`}
+          {detect.augmented > 0
+            ? ` It also studied ${detect.augmented} mirrored copies of your pictures, on top of the ${detect.trainedOn} originals.`
+            : ""}
+        </p>
+      </div>
+    </section>
   );
 }
 
@@ -253,6 +307,9 @@ export function DetectTrainView() {
 
       <div className="train__cols">
         <section className="train__results">
+          {detect && detect.epochs.length > 1 && !running ? (
+            <VerdictPanel detect={detect} />
+          ) : null}
           {!detect || detect.verdicts.length === 0 ? (
             <div className="card">
               <EmptyState
@@ -364,10 +421,14 @@ export function DetectTrainView() {
           {detect && detect.epochs.length > 1 ? (
             <section className="card">
               <div className="card__head">
-                <h3>Loss</h3>
+                <h3>How the practice went</h3>
               </div>
               <div className="card__body">
                 <LossCurve epochs={detect.epochs} />
+                <p className="field__hint">
+                  Lower is better. The first line is how well it read the pictures it studied,
+                  the second how well it read the ones it had never seen.
+                </p>
               </div>
             </section>
           ) : null}
@@ -408,6 +469,27 @@ export function DetectTrainView() {
                   <span className="field__hint">{field.hint}</span>
                 </div>
               ))}
+              <div className="field">
+                <label className="switch">
+                  <input
+                    id="set-augment"
+                    type="checkbox"
+                    className="switch__input"
+                    disabled={running}
+                    checked={manifest.settings.augment}
+                    onChange={(event) => updateSettings({ augment: event.target.checked })}
+                  />
+                  <span className="switch__box" aria-hidden="true">
+                    <Check size={12} weight="bold" />
+                  </span>
+                  <span className="switch__text">Practise on mirrored copies</span>
+                </label>
+                <span className="field__hint">
+                  Shows the detector a flipped, slightly relit copy of every picture as well as
+                  the original, so it learns the thing rather than where the thing happened to
+                  sit. Doubles the memory a run needs and the time it spends reading pictures.
+                </span>
+              </div>
             </div>
           </section>
         </aside>

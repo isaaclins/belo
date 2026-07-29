@@ -5,6 +5,7 @@ import {
   CheckCircle,
   CircleNotch,
   Lightning,
+  Question,
   Sliders,
   Stop,
   WarningCircle,
@@ -13,11 +14,17 @@ import { useStore, type ImageVerdict } from "../lib/store";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { DEFAULT_SETTINGS, hasLabel, labelsOf, type TrainSettings } from "../lib/types";
 import { storage } from "../lib/storage";
+import { readScores } from "../lib/curve";
 
 type Filter = "all" | "correct" | "wrong";
 
+/** The settings that are numbers, so the number inputs cannot reach a flag. */
+type NumberSetting = {
+  [K in keyof TrainSettings]: TrainSettings[K] extends number ? K : never;
+}[keyof TrainSettings];
+
 const NUMBER_FIELDS: {
-  key: keyof TrainSettings;
+  key: NumberSetting;
   label: string;
   min: number;
   max: number;
@@ -43,6 +50,42 @@ const NUMBER_FIELDS: {
     hint: "Width of the dense head",
   },
 ];
+
+/**
+ * The classifier's plain-language verdict. It has two accuracy numbers rather
+ * than the detector's two loss curves, so the reading is simpler, but the
+ * sentences come from the same tested module in lib/curve.ts.
+ */
+function VerdictPanel({
+  accuracy,
+  valAccuracy,
+  images,
+}: {
+  accuracy: number | null;
+  valAccuracy: number | null;
+  images: number;
+}) {
+  const verdict = readScores({ training: accuracy, holdout: valAccuracy, images });
+  const icon =
+    verdict.tone === "good" ? (
+      <CheckCircle size={20} weight="bold" />
+    ) : verdict.tone === "unknown" ? (
+      <Question size={20} weight="bold" />
+    ) : (
+      <WarningCircle size={20} weight="bold" />
+    );
+  return (
+    <section className={`card verdict verdict--${verdict.tone}`}>
+      <div className="card__body stack">
+        <div className="verdict__head">
+          <span className="verdict__icon">{icon}</span>
+          <h3 className="verdict__headline">{verdict.headline}</h3>
+        </div>
+        <p className="verdict__advice">{verdict.advice}</p>
+      </div>
+    </section>
+  );
+}
 
 export function TrainView() {
   const manifest = useStore((s) => s.manifest);
@@ -210,6 +253,13 @@ export function TrainView() {
 
       <div className="train__cols">
         <section className="train__results">
+          {train.verdicts.length > 0 && !running ? (
+            <VerdictPanel
+              accuracy={train.accuracy}
+              valAccuracy={train.valAccuracy}
+              images={labeledCount}
+            />
+          ) : null}
           {train.verdicts.length === 0 ? (
             <div className="card">
               <EmptyState

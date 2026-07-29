@@ -1559,6 +1559,73 @@
   font-weight: 700;
 }
 
+/* ---------- The plain-language verdict ---------- */
+/* One loud panel above the results that says what the run meant. Its whole job
+   is to be read first, so it carries the heavy shadow and a colour bar keyed to
+   the tone rather than sitting quietly in the sidebar with the numbers. */
+.verdict {
+  border-left: 10px solid var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.verdict--good {
+  border-left-color: var(--success);
+}
+
+.verdict--watch {
+  border-left-color: var(--accent);
+}
+
+.verdict--bad {
+  border-left-color: var(--danger);
+}
+
+.verdict--unknown {
+  border-left-color: var(--ink-soft);
+}
+
+.verdict__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+}
+
+.verdict__icon {
+  display: flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.verdict--good .verdict__icon {
+  color: var(--success);
+}
+
+.verdict--bad .verdict__icon {
+  color: var(--danger);
+}
+
+.verdict__headline {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.25;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.verdict__advice {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.verdict__note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
 .dcurve {
   display: flex;
   flex-direction: column;
