@@ -38,7 +38,13 @@ import {
 } from "./images";
 import { initBackend } from "./ml/backend";
 import { augmentFor, flipBoxes, VARIANTS } from "./augment";
-import { embedToArray, embedWithSpatial, loadFeatureModel } from "./ml/features";
+import {
+  embedDetectFeatures,
+  embedToArray,
+  embedWithSpatial,
+  loadDetectFeatureModel,
+  loadFeatureModel,
+} from "./ml/features";
 import type { Attention, AttentionMap } from "./attention";
 import { iou, matchDetections, type Detection, type LabeledRect } from "./detect";
 import {
@@ -257,18 +263,20 @@ interface State {
 // avoids pointless React work on every frame of a webcam session.
 const featureCache = new Map<string, Float32Array>();
 /**
- * Grid features for detect projects, one 49 by 1024 map per picture. That is
- * 196 KB each, so a hundred picture project holds about 20 MB here, and a run
- * over three hundred pictures needs roughly 60 MB while it trains. The cache
- * exists so MobileNet runs once per picture per run rather than once per epoch,
- * and it is dropped whenever the project is.
+ * Grid features for detect projects, one packed pair of maps per picture: the
+ * 49 by 1024 coarse map and the 196 by 512 fine one. That is 588 KB each, so a
+ * hundred picture project holds about 59 MB here, and 118 MB when practising on
+ * mirrored copies doubles the number of views. The second map tripled this
+ * number and it is the one real cost of the finer grid; it is paid because the
+ * alternative is a second MobileNet pass per picture per epoch. The cache is
+ * dropped whenever the project is.
  */
 const spatialCache = new Map<string, Float32Array>();
 
 /**
  * Forgets every cached feature map of one picture, the augmented variants of it
  * included. A deleted picture that left its mirrored copy behind would hold
- * 196 KB for the rest of the session and never be asked for again.
+ * 588 KB for the rest of the session and never be asked for again.
  */
 function dropCaches(imageId: string): void {
   featureCache.delete(imageId);
@@ -447,7 +455,8 @@ export const useStore = create<State>((set, get) => {
   };
 
   /**
-   * Loads and caches the 49 by 1024 grid features for one stored image.
+   * Loads and caches the packed grid features for one stored image: the coarse
+   * 49 by 1024 map followed by the fine 196 by 512 one, from a single pass.
    *
    * Variant 0 is the picture as it was stored. Anything above that is an
    * augmented copy, mirrored and slightly relit, and gets its own cache entry
@@ -460,19 +469,13 @@ export const useStore = create<State>((set, get) => {
     const path = get().path;
     if (!path) throw new Error("No project is open");
     const img = await loadImageElement(storage.imageUrl(path, record.file));
-    const { pooled, spatial } = await embedWithSpatial(img, true, augmentFor(record.id, variant));
-    if (!spatial) throw new Error("The feature extractor returned no grid");
-    try {
-      const cells = (await spatial.cells.data()) as Float32Array;
-      spatialCache.set(key, cells);
-      // The same pass already produced the pooled embedding, so the classifier
-      // cache gets it for free. Only from the untouched picture: the classifier
-      // has no idea its embedding was mirrored.
-      if (variant === 0 && !featureCache.has(record.id)) featureCache.set(record.id, pooled);
-      return cells;
-    } finally {
-      spatial.cells.dispose();
-    }
+    const { pack, pooled } = await embedDetectFeatures(img, augmentFor(record.id, variant));
+    spatialCache.set(key, pack);
+    // The same pass already produced the pooled embedding, so the classifier
+    // cache gets it for free. Only from the untouched picture: the classifier
+    // has no idea its embedding was mirrored.
+    if (variant === 0 && !featureCache.has(record.id)) featureCache.set(record.id, pooled);
+    return pack;
   };
 
   /** Labels that actually hold images, plus the samples that can be trained on. */
@@ -636,7 +639,7 @@ export const useStore = create<State>((set, get) => {
     try {
       const backend = await initBackend();
       set({ backend });
-      await loadFeatureModel();
+      await loadDetectFeatureModel();
       set((s) => ({ train: { ...s.train, message: "Reading pictures" } }));
 
       const mark = (done: number) => set((s) => ({ train: { ...s.train, done } }));
@@ -1117,7 +1120,7 @@ export const useStore = create<State>((set, get) => {
           if (storedDetector) {
             const parsed = JSON.parse(storedDetector) as StoredDetector;
             if (canRestoreModel(manifest, "detect", parsed.labelIds)) {
-              await loadFeatureModel();
+              await loadDetectFeatureModel();
               const restored = deserializeDetector(parsed);
               if (restored) {
                 if (get().path === path) {
@@ -1657,13 +1660,8 @@ export const useStore = create<State>((set, get) => {
     async detectObjects(source, scoreThreshold) {
       const manifest = get().manifest;
       if (!manifest || manifest.mode !== "detect" || !detector) return null;
-      const { spatial } = await embedWithSpatial(source, true);
-      if (!spatial) return null;
-      try {
-        return detectSpatialMap(detector, spatial.cells, { scoreThreshold });
-      } finally {
-        spatial.cells.dispose();
-      }
+      const { pack } = await embedDetectFeatures(source);
+      return detectSpatialMap(detector, pack, { scoreThreshold });
     },
 
     async predict(source, wantAttention = false) {
