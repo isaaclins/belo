@@ -1,0 +1,101 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Set only on a v* tag push. Empty on workflow_dispatch, which makes
+  # tauri-action build the installers without touching any GitHub Release.
+  RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+
+jobs:
+  # One job per installer, on the OS that can produce it. The builds are
+  # unsigned: there is no Apple Developer ID and no Windows signing certificate
+  # yet, so macOS wants a right click and Open the first time, and Windows shows
+  # a SmartScreen warning. The README download section says so plainly.
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS (Apple Silicon)
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles dmg
+          - os: ubuntu-22.04
+            label: Linux (x86_64)
+            target: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles deb,appimage
+          - os: windows-latest
+            label: Windows (x86_64)
+            target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --bundles msi,nsis
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            xdg-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - run: npm ci
+
+      # tauri-action runs the frontend build itself through beforeBuildCommand,
+      # then bundles. With RELEASE_TAG set it also creates or updates the GitHub
+      # Release for that tag and uploads the installers to it.
+      - uses: tauri-apps/tauri-action@v1
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: ${{ env.RELEASE_TAG && format('Belo {0}', env.RELEASE_TAG) || '' }}
+          releaseBody: |
+            Download the installer for your machine below.
+
+            The builds are unsigned. On macOS, right click Belo in Applications and
+            choose Open the first time, because Gatekeeper blocks a double click on an
+            unsigned app. On Windows, choose More info then Run anyway if SmartScreen
+            warns you.
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: false
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: belo-${{ matrix.target }}-[bundle]
+          args: ${{ matrix.args }}

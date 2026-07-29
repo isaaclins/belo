@@ -1,0 +1,89 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The frontend side: typecheck, the five check scripts, and a real Vite build.
+  # `npm test` is the same list a developer runs locally, so CI cannot drift
+  # from the local suite.
+  web:
+    name: checks and build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: npm test
+        run: npm test
+
+      - name: npm run build
+        run: npm run build
+
+  # The Rust side. Checked on every platform Belo ships an installer for, so a
+  # platform specific compile error shows up here and not first on a release
+  # tag. The frontend has to be built before cargo runs, because tauri-build
+  # reads frontendDist at compile time.
+  rust:
+    name: cargo ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - name: Build the frontend for tauri-build
+        run: npm run build
+
+      - name: cargo check
+        run: cargo check --locked --all-targets
+        working-directory: src-tauri
+
+      - name: cargo test
+        run: cargo test --locked
+        working-directory: src-tauri
