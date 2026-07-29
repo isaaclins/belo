@@ -237,17 +237,34 @@ export interface StoredHead {
   weights: { shape: number[]; values: number[] }[];
 }
 
-/** Serialized detection head, stored at model/detect.json inside the bundle. */
+/** One feature map a detection head reads, with the anchors that sit on it. */
+export interface StoredFeatureScale {
+  rows: number;
+  cols: number;
+  depth: number;
+  scales: number[];
+  ratios: number[];
+}
+
+/**
+ * Serialized detection head, stored at model/detect.json inside the bundle.
+ *
+ * Version 1 heads read one 7x7 map and describe it with rows, cols, scales and
+ * ratios. Version 2 heads read a list of maps and carry featureScales; the
+ * version 1 fields stay filled in with the coarse map so they never lie.
+ */
 export interface StoredDetector {
   formatVersion: number;
   labelIds: string[];
   featureSize: number;
-  /** Feature grid the head was built for, 7x7 for a 224 pixel input. */
+  /** Coarse feature grid the head was built for, 7x7 for a 224 pixel input. */
   rows: number;
   cols: number;
-  /** Anchor set, so a head keeps working if the defaults ever move. */
+  /** Anchor set of the coarse grid, so a head keeps working if the defaults move. */
   scales: number[];
   ratios: number[];
+  /** Version 2 and up: every map the head reads, coarse first. */
+  featureScales?: StoredFeatureScale[];
   headWidth: number;
   weights: { shape: number[]; values: number[] }[];
 }

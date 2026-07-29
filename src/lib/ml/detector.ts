@@ -1,14 +1,26 @@
-// The trainable detector: an SSD style head on the frozen MobileNet grid.
+// The trainable detector: an SSD style head on two frozen MobileNet grids.
 //
 // Where the classifier head sees one pooled 1024 value embedding per picture,
-// this head sees the 7x7x1024 activation before pooling and answers per cell.
-// Six anchors sit on every cell, and for each of them the head predicts four
-// box offsets and one score per label plus background.
+// this head sees the activations before pooling and answers per cell, on two
+// maps at once: the 7x7x1024 cut at conv_pw_13_relu and the 14x14x512 cut one
+// stage earlier. Six anchors sit on every cell of both, and for each of them
+// the head predicts four box offsets and one score per label plus background.
+//
+// The second map is there for placement, not for recognition. One cell of
+// conv_pw_13_relu already sees most of the picture and knows perfectly well
+// that there is a dog in it; what it cannot do is say where the dog ends, since
+// every box it proposes starts from a grid whose centers are 32 pixels apart.
+// On real photographs that was the dominant failure: the right object, at the
+// wrong size, just under the half overlap a detection is counted at.
 //
 // Choices, all of them documented next to the code that depends on them:
 //
-// - Anchors and offset coding live in lib/detect.ts, which is pure and checked
-//   in node by scripts/check-detect.mjs.
+// - Anchors, feature scales and offset coding live in lib/detect.ts, which is
+//   pure and checked in node by scripts/check-detect.mjs.
+// - Each map gets its own small branch, and the branches are concatenated
+//   coarse first. Sharing one branch is impossible: the maps have different
+//   depths. Concatenating in a fixed order is what lets an old single grid
+//   model be exactly the first branch of a new one, anchors included.
 // - The head is a per cell stack of 1x1 layers and never a 3x3 convolution.
 //   Two reasons. The cheap one is speed: a convolution over 1024 channels is
 //   two orders of magnitude slower to train in a webview than the equivalent
@@ -36,19 +48,19 @@ import type { StoredDetector, TrainSettings } from "../types";
 import { bestEpochIndex, outOfPatience, PATIENCE } from "../curve";
 import { FEATURE_SIZE } from "./features";
 import {
-  ANCHOR_RATIOS,
-  ANCHOR_SCALES,
   anchorShapes,
-  buildAnchors,
+  buildScaleAnchors,
   buildTargets,
   decodeDetections,
-  GRID_COLS,
-  GRID_ROWS,
+  DETECT_SCALES,
+  featureLength,
+  legacyScale,
   mineNegatives,
-  standardizeCells,
+  standardizeScales,
   type Anchor,
   type DecodeOptions,
   type Detection,
+  type FeatureScale,
   type LabeledRect,
 } from "../detect";
 
@@ -73,11 +85,11 @@ export interface Detector {
   model: tf.LayersModel;
   labelIds: string[];
   anchors: Anchor[];
-  rows: number;
-  cols: number;
   headWidth: number;
-  scales: number[];
-  ratios: number[];
+  /** Feature maps the head reads, coarse first. One entry on a restored v1 head. */
+  featureScales: FeatureScale[];
+  /** Floats one example has to carry for this head, sum over the maps. */
+  featureLength: number;
 }
 
 export interface DetectEpoch {
@@ -92,7 +104,7 @@ export interface DetectEpoch {
 /** One picture as the detector trains on it: cached grid features plus boxes. */
 export interface DetectSample {
   imageId: string;
-  /** rows * cols * FEATURE_SIZE floats, row major, exactly as features.ts hands them back. */
+  /** The packed maps, coarse then fine, exactly as features.ts hands them back. */
   features: Float32Array;
   boxes: LabeledRect[];
 }
@@ -122,68 +134,97 @@ export interface DetectTrainResult {
   stoppedEarly: boolean;
 }
 
+/** Layer names, suffixed per map so the first branch keeps the v1 names. */
+function named(base: string, index: number): string {
+  return index === 0 ? base : `${base}_${index}`;
+}
+
 export function buildDetector(
   labelIds: string[],
   headWidth: number,
-  rows = GRID_ROWS,
-  cols = GRID_COLS,
-  scales: number[] = ANCHOR_SCALES,
-  ratios: number[] = ANCHOR_RATIOS,
+  featureScales: FeatureScale[] = DETECT_SCALES,
 ): Detector {
-  const shapes = anchorShapes(scales, ratios);
-  const perCell = shapes.length;
   const classes = labelIds.length + 1;
-  const total = rows * cols * perCell;
+  const inputs: tf.SymbolicTensor[] = [];
+  const locParts: tf.SymbolicTensor[] = [];
+  const clsParts: tf.SymbolicTensor[] = [];
+  const clsLayerNames: string[] = [];
 
-  // One row per grid cell, exactly the layout features.ts hands back.
-  const input = tf.input({ shape: [rows * cols, FEATURE_SIZE] });
-  const mixed = tf.layers
-    .dense({
-      units: headWidth,
-      activation: "relu",
-      kernelInitializer: "varianceScaling",
-      name: "detect_mix",
-    })
-    .apply(input) as tf.SymbolicTensor;
-  const noised = tf.layers
-    .dropout({ rate: DROPOUT, name: "detect_drop" })
-    .apply(mixed) as tf.SymbolicTensor;
+  featureScales.forEach((scale, index) => {
+    const perCell = anchorShapes(scale.scales, scale.ratios).length;
+    const cells = scale.rows * scale.cols;
+    const total = cells * perCell;
 
-  const locCell = tf.layers
-    .dense({ units: perCell * 4, kernelInitializer: "varianceScaling", name: "detect_loc" })
-    .apply(noised) as tf.SymbolicTensor;
-  const loc = tf.layers
-    .reshape({ targetShape: [total, 4], name: "detect_loc_out" })
-    .apply(locCell) as tf.SymbolicTensor;
+    // One row per grid cell, exactly the layout features.ts hands back.
+    const input = tf.input({ shape: [cells, scale.depth] });
+    inputs.push(input);
+    const mixed = tf.layers
+      .dense({
+        units: headWidth,
+        activation: "relu",
+        kernelInitializer: "varianceScaling",
+        name: named("detect_mix", index),
+      })
+      .apply(input) as tf.SymbolicTensor;
+    const noised = tf.layers
+      .dropout({ rate: DROPOUT, name: named("detect_drop", index) })
+      .apply(mixed) as tf.SymbolicTensor;
 
-  const clsCell = tf.layers
-    .dense({ units: perCell * classes, kernelInitializer: "varianceScaling", name: "detect_cls" })
-    .apply(noised) as tf.SymbolicTensor;
-  const cls = tf.layers
-    .reshape({ targetShape: [total, classes], name: "detect_cls_out" })
-    .apply(clsCell) as tf.SymbolicTensor;
+    const locName = named("detect_loc", index);
+    const locCell = tf.layers
+      .dense({ units: perCell * 4, kernelInitializer: "varianceScaling", name: locName })
+      .apply(noised) as tf.SymbolicTensor;
+    locParts.push(
+      tf.layers
+        .reshape({ targetShape: [total, 4], name: `${locName}_out` })
+        .apply(locCell) as tf.SymbolicTensor,
+    );
 
-  const model = tf.model({ inputs: input, outputs: [loc, cls] });
+    const clsName = named("detect_cls", index);
+    clsLayerNames.push(clsName);
+    const clsCell = tf.layers
+      .dense({ units: perCell * classes, kernelInitializer: "varianceScaling", name: clsName })
+      .apply(noised) as tf.SymbolicTensor;
+    clsParts.push(
+      tf.layers
+        .reshape({ targetShape: [total, classes], name: `${clsName}_out` })
+        .apply(clsCell) as tf.SymbolicTensor,
+    );
+  });
+
+  // Anchor index a means the same row of the same output on both sides, so the
+  // maps are joined in exactly the order buildScaleAnchors walks them.
+  const join = (parts: tf.SymbolicTensor[], name: string) =>
+    parts.length === 1
+      ? parts[0]
+      : (tf.layers.concatenate({ axis: 1, name }).apply(parts) as tf.SymbolicTensor);
+
+  const model = tf.model({
+    inputs: inputs.length === 1 ? inputs[0] : inputs,
+    outputs: [join(locParts, "detect_loc_all"), join(clsParts, "detect_cls_all")],
+  });
 
   // getWeights hands back the live variable tensors, so the prior is written
   // through setWeights and nothing here is disposed by hand.
-  const clsLayer = model.getLayer("detect_cls");
-  const [kernel, bias] = clsLayer.getWeights();
-  const prior = (bias.dataSync() as Float32Array).slice();
-  for (let a = 0; a < perCell; a += 1) prior[a * classes] = BACKGROUND_BIAS;
-  const priorTensor = tf.tensor1d(prior);
-  clsLayer.setWeights([kernel, priorTensor]);
-  priorTensor.dispose();
+  clsLayerNames.forEach((name, index) => {
+    const scale = featureScales[index];
+    const perCell = anchorShapes(scale.scales, scale.ratios).length;
+    const clsLayer = model.getLayer(name);
+    const [kernel, bias] = clsLayer.getWeights();
+    const prior = (bias.dataSync() as Float32Array).slice();
+    for (let a = 0; a < perCell; a += 1) prior[a * classes] = BACKGROUND_BIAS;
+    const priorTensor = tf.tensor1d(prior);
+    clsLayer.setWeights([kernel, priorTensor]);
+    priorTensor.dispose();
+  });
 
   return {
     model,
     labelIds,
-    anchors: buildAnchors(rows, cols, shapes),
-    rows,
-    cols,
+    anchors: buildScaleAnchors(featureScales),
     headWidth,
-    scales,
-    ratios,
+    featureScales,
+    featureLength: featureLength(featureScales),
   };
 }
 
@@ -202,28 +243,38 @@ function prepare(
 ): PreparedSample[] {
   return samples.map((sample) => ({
     ...sample,
-    features: standardizeCells(sample.features, detector.rows * detector.cols, FEATURE_SIZE),
+    features: standardizeScales(sample.features, detector.featureScales),
     ...buildTargets(detector.anchors, sample.boxes, labelIds),
   }));
 }
 
-function stackFeatures(batch: PreparedSample[], rows: number, cols: number): tf.Tensor3D {
-  const stride = rows * cols * FEATURE_SIZE;
-  const flat = new Float32Array(batch.length * stride);
-  batch.forEach((sample, i) => flat.set(sample.features, i * stride));
-  return tf.tensor3d(flat, [batch.length, rows * cols, FEATURE_SIZE]);
+/** One [batch, cells, depth] tensor per feature map, sliced out of the pack. */
+function stackFeatures(batch: PreparedSample[], scales: FeatureScale[]): tf.Tensor3D[] {
+  let at = 0;
+  return scales.map((scale) => {
+    const cells = scale.rows * scale.cols;
+    const length = cells * scale.depth;
+    const from = at;
+    at += length;
+    const flat = new Float32Array(batch.length * length);
+    batch.forEach((sample, i) => {
+      flat.set(sample.features.subarray(from, from + length), i * length);
+    });
+    return tf.tensor3d(flat, [batch.length, cells, scale.depth]);
+  });
 }
 
 /** Cross entropy of every anchor against its target, without any gradient. */
-function anchorLosses(model: tf.LayersModel, xs: tf.Tensor3D, anchorCount: number): number[][] {
+function anchorLosses(model: tf.LayersModel, xs: tf.Tensor3D[], anchorCount: number): number[][] {
   return tf.tidy(() => {
+    const size = xs[0].shape[0];
     const [, logits] = model.predict(xs) as tf.Tensor[];
     const logp = tf.logSoftmax(logits as tf.Tensor3D, -1);
     // Mining ranks background anchors by how badly the head currently rates the
     // background class, which is exactly minus the log of its probability.
     const background = logp
-      .slice([0, 0, 0], [xs.shape[0], anchorCount, 1])
-      .reshape([xs.shape[0], anchorCount])
+      .slice([0, 0, 0], [size, anchorCount, 1])
+      .reshape([size, anchorCount])
       .mul(-1) as tf.Tensor2D;
     return background.arraySync() as number[][];
   });
@@ -257,7 +308,7 @@ function batchTensors(batch: PreparedSample[], anchorCount: number, classCount: 
 
 function lossFor(
   model: tf.LayersModel,
-  xs: tf.Tensor3D,
+  xs: tf.Tensor3D[],
   classTargets: tf.Tensor3D,
   locTargets: tf.Tensor3D,
   positiveMask: tf.Tensor2D,
@@ -294,7 +345,7 @@ function runBatch(
     anchorCount,
     classCount,
   );
-  const xs = stackFeatures(batch, detector.rows, detector.cols);
+  const xs = stackFeatures(batch, detector.featureScales);
 
   // Mining looks at what the head believes right now, so it runs outside the
   // gradient tape and hands the loss a plain 0/1 weight per anchor.
@@ -336,7 +387,7 @@ function runBatch(
       });
     }
   } finally {
-    xs.dispose();
+    xs.forEach((x) => x.dispose());
     classT.dispose();
     locT.dispose();
     posT.dispose();
@@ -492,23 +543,33 @@ export async function trainDetector(input: DetectTrainInput): Promise<DetectTrai
 /**
  * The inference contract phase 3 consumes.
  *
- * Takes one picture's grid features, either the Float32Array the feature cache
- * holds or the [rows * cols, FEATURE_SIZE] tensor features.ts hands back, and
- * returns decoded detections in normalized image coordinates with the top left
- * corner at x/y. Thresholding and per label non maximum suppression happen
- * here, so a caller gets a list it can draw without any further filtering.
+ * Takes one picture's packed grid features, either the Float32Array the feature
+ * cache holds or the tensor features.ts hands back, and returns decoded
+ * detections in normalized image coordinates with the top left corner at x/y.
+ * Thresholding and per label non maximum suppression happen here, so a caller
+ * gets a list it can draw without any further filtering.
+ *
+ * A pack longer than the head asks for is read as a prefix, which is what lets
+ * a detect model saved before the fine map existed run on the features the app
+ * now caches.
  */
 export function detect(
   detector: Detector,
   cells: Float32Array | tf.Tensor2D,
   options: DecodeOptions = {},
 ): Detection[] {
-  const { rows, cols } = detector;
   const raw = cells instanceof Float32Array ? cells : (cells.dataSync() as Float32Array);
-  const standardized = standardizeCells(raw, rows * cols, FEATURE_SIZE);
+  const standardized = standardizeScales(raw, detector.featureScales);
   const [scores, offsets] = tf.tidy(() => {
-    const xs = tf.tensor3d(standardized, [1, rows * cols, FEATURE_SIZE]);
-    const [loc, logits] = detector.model.predict(xs) as tf.Tensor[];
+    let at = 0;
+    const xs = detector.featureScales.map((scale) => {
+      const cellCount = scale.rows * scale.cols;
+      const length = cellCount * scale.depth;
+      const slice = standardized.subarray(at, at + length);
+      at += length;
+      return tf.tensor3d(slice, [1, cellCount, scale.depth]);
+    });
+    const [loc, logits] = detector.model.predict(xs.length === 1 ? xs[0] : xs) as tf.Tensor[];
     const probs = tf.softmax(logits as tf.Tensor3D, -1);
     return [
       probs.dataSync() as Float32Array,
@@ -529,23 +590,35 @@ export function detectSpatialMap(
   cells: Float32Array | tf.Tensor2D,
   options: DecodeOptions = {},
 ): Detection[] {
-  const expected = detector.rows * detector.cols * FEATURE_SIZE;
+  const expected = detector.featureLength;
   const actual = cells instanceof Float32Array ? cells.length : cells.size;
-  if (actual !== expected) {
+  if (actual < expected) {
     throw new Error(`Detector expected ${expected} spatial values, got ${actual}`);
   }
   return detect(detector, cells, options);
 }
 
+/**
+ * Version 1 is a head on one 7x7 map. Version 2 carries a featureScales list
+ * and may hold any number of maps. Both are written and read here: a saved
+ * version 1 detector rebuilds its single branch and keeps working, and version
+ * 2 is what every new run produces.
+ */
+export const DETECTOR_FORMAT_VERSION = 2;
+
 export function serializeDetector(detector: Detector): StoredDetector {
+  const first = detector.featureScales[0];
   return {
-    formatVersion: 1,
+    formatVersion: DETECTOR_FORMAT_VERSION,
     labelIds: detector.labelIds,
     featureSize: FEATURE_SIZE,
-    rows: detector.rows,
-    cols: detector.cols,
-    scales: detector.scales,
-    ratios: detector.ratios,
+    // The version 1 fields keep describing the coarse map, so an older reader
+    // that only knows them sees something true rather than something absent.
+    rows: first.rows,
+    cols: first.cols,
+    scales: first.scales,
+    ratios: first.ratios,
+    featureScales: detector.featureScales,
     headWidth: detector.headWidth,
     weights: detector.model.getWeights().map((w) => ({
       shape: w.shape.slice(),
@@ -554,16 +627,15 @@ export function serializeDetector(detector: Detector): StoredDetector {
   };
 }
 
+/** The feature maps a stored head was trained on, whichever version wrote it. */
+export function storedScales(stored: StoredDetector): FeatureScale[] {
+  if (stored.featureScales?.length) return stored.featureScales;
+  return [legacyScale(stored.rows, stored.cols, stored.featureSize, stored.scales, stored.ratios)];
+}
+
 export function deserializeDetector(stored: StoredDetector): Detector | null {
   if (stored.featureSize !== FEATURE_SIZE) return null;
-  const detector = buildDetector(
-    stored.labelIds,
-    stored.headWidth,
-    stored.rows,
-    stored.cols,
-    stored.scales,
-    stored.ratios,
-  );
+  const detector = buildDetector(stored.labelIds, stored.headWidth, storedScales(stored));
   const expected = detector.model.getWeights();
   if (expected.length !== stored.weights.length) {
     detector.model.dispose();
