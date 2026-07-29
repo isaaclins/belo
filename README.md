@@ -31,7 +31,10 @@ Every new project offers three clear choices:
 
 1. **Draw boxes.** Add pictures, then drag a box around every object you want Belo to
    find.
-2. **Train.** Belo studies the box labels, positions and sizes.
+2. **Train.** Belo studies the box labels, positions and sizes. It also practises on
+   mirrored copies of your pictures, keeps the round that did best on pictures it had never
+   seen, and then tells you in plain words whether it learned the idea or just memorized
+   your pictures.
 3. **Use live.** Point the camera at your scene. Belo draws real boxes around the custom
    objects it finds, or does the same on one chosen picture.
 
@@ -83,6 +86,14 @@ Results depend on your examples and camera quality, so varied, clear pictures us
 better. Detection reads a 7x7 grid over the picture, so an object much smaller than a
 seventh of the frame is hard for it to place. Training detection on a phone can also use a
 lot of memory, so desktop is the safer choice for a large project.
+
+**Detection is much weaker on messy photographs than on tidy ones.** Measured on 169 real
+photographs of people, cats and dogs from COCO, Belo finds about half of the objects a
+person drew and about half of what it reports is real. Most of the misses are not the wrong
+object; they are a box on the right object that is too small or off by a grid cell. It does
+far better on the case it is built for: one object you photograph yourself, from a few
+angles, filling a decent part of the frame. The numbers and the reasoning are in
+[Detection on real photographs](#detection-on-real-photographs).
 
 **Show attention** remains a rough classification hint, not a detector. It is available
 only in Classify one answer and Classify many answers projects. Detect objects projects
@@ -168,8 +179,9 @@ be switched afterwards.
    and the count next to a label is how many boxes carry it. The Train view trains a
    detection head on those boxes and then shows every scored picture twice over: your
    boxes in their label colour, the boxes the detector read dashed on top, so a miss and a
-   false alarm are visible instead of averaged away. It wants boxes on at least ten
-   pictures before it will train. The Use view runs that head on the camera at the same
+   false alarm are visible instead of averaged away, plus one plain-language verdict on
+   whether the run learned the idea or memorized the pictures. It wants boxes on at least
+   ten pictures before it will train. The Use view runs that head on the camera at the same
    paced cadence as classification, dropping a tick instead of queueing work when a frame
    is still running, and also accepts one image for a single pass.
 
@@ -230,11 +242,29 @@ grid rather than the pooled embedding. It follows the SSD recipe:
   Anything at 0.3 or above survives by default, then per label suppression at 0.3 overlap
   removes the duplicates that neighbouring anchors produce. The Use view can move the
   score cutoff between 0.2, 0.3, 0.5 and 0.7 without retraining.
+- **Mirrored copies.** Detect training shows the head a horizontally flipped copy of every
+  training picture, with the boxes flipped with it, under a mild brightness and saturation
+  jitter. It is on by default and can be switched off in the Train view settings. The
+  transform happens on pixels before the frozen extractor runs, because there is no flip of
+  a 1024 value activation, and the variants are built once per run rather than once per
+  epoch. Rotation, shear and random crops are deliberately absent: a crop can cut an object
+  in half and turn a correct box into a wrong one, while a flip and a colour shift cannot
+  lie about a box. The plan is pure and lives in `src/lib/augment.ts`; the pixel transform
+  is `applyAugment` in `src/lib/ml/features.ts`.
+- **Early stopping.** When a run has a holdout, it watches the holdout loss, gives up after
+  ten epochs without an improvement and hands back the weights from the best epoch rather
+  than the last. The last epoch is the most memorized head in the run by construction. A
+  run without a holdout trains its configured epochs and keeps what it ends on, exactly as
+  before. The rule is a pure function in `src/lib/curve.ts` and the Train view reports which
+  round was kept. On real photographs this usually ends a run inside twenty epochs instead
+  of a hundred and fifty, which is a large part of why detect training now takes seconds.
 
 Training runs its own loop rather than `model.fit`, because of the anchor bookkeeping, and
 it caches the grid features so MobileNet runs once per picture per run. Those cached maps
 are the memory cost of a detect run: 196 KB per picture, so about 20 MB for a hundred
-pictures and 60 MB for three hundred.
+pictures and 60 MB for three hundred. Mirrored copies double that, because an augmented
+variant is a second feature map over the same file: about 40 MB for a hundred pictures and
+120 MB for three hundred. Switching the toggle off halves it again.
 
 The runtime inference contract is `detectSpatialMap(detector, cells, options)` in
 `src/lib/ml/detector.ts`. It accepts one 7x7 spatial feature map and returns normalized
@@ -312,11 +342,14 @@ Shapes.belo/
     "recall": 0.75,
     "boxCount": 49,
     "imageCount": 44,
-    "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15 }
+    // epochs is the round the run kept, which in a detect project with a
+    // holdout is the best one rather than the last one it ran
+    "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15, "augment": false }
   },
   "checkpoint": null,            // same shape as model, describes head.prev.json
   "modelStale": false,           // true when data changed after this model trained
-  "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15 }
+  // augment is detect only and inert elsewhere: mirrored, slightly relit copies
+  "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15, "augment": false }
 }
 ```
 
@@ -328,8 +361,14 @@ head width it was built with, so a head keeps loading if those defaults ever mov
 
 Detect projects are created with different training settings, because a detection head
 sees hundreds of anchors per picture instead of one embedding: 150 epochs, batches of 8, a
-learning rate of 0.002, a head width of 96 and a fifth of the pictures held back. Single
-and multi projects are created with the same settings they always were.
+learning rate of 0.002, a head width of 96, a fifth of the pictures held back and mirrored
+copies on. Those 150 epochs are a ceiling rather than a plan: with a holdout, a run stops
+as soon as the holdout loss has not improved for ten of them. Single and multi projects are
+created with the same settings they always were, with `augment` off, where it does nothing.
+
+A manifest written before `augment` existed gains it from the defaults for its mode on the
+next load, which means an old detect project starts using mirrored copies and an old
+classifier project does not change at all.
 
 ### Schema versions
 
@@ -364,16 +403,113 @@ npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
 ```
 
-Detection release verification. `npm test` runs all five in this order and prints how long
+Detection release verification. `npm test` runs all six in this order and prints how long
 each one took, which is exactly what CI does:
 
 ```bash
 npm run check:boxes       # manifest v3 and one-finger box geometry
-npm run check:detect      # anchors, loss inputs, decoding and scoring
+npm run check:detect      # anchors, loss inputs, decoding, scoring and flip geometry
+npm run check:curve       # which epoch a run keeps and what it tells you afterwards
 npm run check:store       # stale-model persistence and serialized manifest saves
 npm run check:camera      # live camera switching seam
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
+
+One more measurement is not part of `npm test`, because it downloads photographs:
+
+```bash
+npm run eval:real         # train and score on real COCO photographs
+```
+
+### Detection on real photographs
+
+```bash
+npm run eval:real                  # train and score, using the cached data
+npm run eval:real -- --no-augment  # the same run without mirrored copies
+npm run eval:real -- --keep-last   # keep the last epoch instead of the best one
+npm run eval:real -- --rebuild     # rebuild the image list from the COCO annotations
+```
+
+`scripts/eval-real.mjs` is a manual tool, not a CI job: it needs the network the first time
+and it downloads about 25 MB of photographs. It exits nonzero only when something is
+broken, never because the score was low.
+
+**Method.** `scripts/data/coco-subset.json` is a committed list of 169 COCO val2017
+photographs across `person`, `cat` and `dog`, with the human drawn boxes that come with
+them. No image data is committed. The classes were not chosen by hand: the rebuild ranks
+every COCO class by how many photographs it carries whose objects are large enough for a
+7x7 grid to place, and takes the top three. A photograph qualifies only when every instance
+of every chosen class in it can be labelled honestly: at least one box covers 15 percent of
+the cropped frame, no box is smaller than 5 percent, none was cut by more than 40 percent by
+the square crop, none fills more than 92 percent of an edge, none is a crowd region, and
+there are at most four. A photograph containing an object that cannot be labelled is
+dropped rather than labelled partially, because a cat left out of the boxes is a cat the
+detector would be punished for finding. Each photograph is then converted exactly the way
+the app converts an import: center cropped to a square, resized to 224, boxes moved with it.
+Every fifth photograph is held out. Training goes through `trainDetector` with the settings
+a new detect project is created with.
+
+**Numbers, measured on this machine at 0.6.0**, 136 training photographs, 33 held out, 215
+boxes, score threshold 0.3, IoU 0.5:
+
+| | found | right | mean overlap |
+| --- | --- | --- | --- |
+| person | 80% (8/10) | 67% (8/12) | |
+| cat | 44% (7/16) | 44% (7/16) | |
+| dog | 29% (4/14) | 36% (4/11) | |
+| **held out overall** | **48%** (19/40) | **49%** (19/39) | **0.62** |
+| the pictures it trained on | 79% | 72% | 0.73 |
+
+That is weak, and it is worth saying plainly rather than burying: on real photographs this
+detector finds about half of what a person drew, and about half of what it reports is real.
+The synthetic proof's 80 percent and 89 percent do not transfer. Four reasons, in the order
+they matter:
+
+- **A 7x7 grid over a 224 pixel frame.** Boxes are placed from 294 anchors on a 32 pixel
+  stride. Looking at the sample renders, most failures are not the detector missing the
+  animal: it is a box on the right animal that is 20 percent too small or shifted by a
+  cell, which scores zero at IoU 0.5 and looks fine to a person. Mean overlap of the boxes
+  it does get right is 0.62, only just above the bar.
+- **One scale of features.** A real SSD reads several feature maps at different depths. This
+  head reads one, so a cat filling the frame and a dog a third of its size have to be found
+  by the same six anchor shapes.
+- **136 photographs.** The holdout loss turns upward after the second epoch and never comes
+  back down. There is not enough data here for the head to learn the idea rather than the
+  pictures, which is exactly what the Train view now says out loud.
+- **COCO is harder than a kitchen table.** Low light, black cats on dark sofas, animals
+  half behind furniture, several people at different depths. A user photographing one
+  object on their own desk from a few angles is a much easier problem than this, which is
+  the case Belo is actually for.
+
+**What the two new training changes are worth here**, same seed, same holdout:
+
+| | found | right | mean overlap | epochs |
+| --- | --- | --- | --- | --- |
+| originals only | 43% | 40% | 0.635 | 13, kept 3 |
+| plus mirrored copies | 48% | 49% | 0.624 | 12, kept 2 |
+| keeping the last epoch instead of the best | 53% | 40% | 0.620 | 150, kept 150 |
+
+Mirrored copies are worth about five points of recall and nine of precision on real
+photographs. On the synthetic set in `check:learning` they are close to a wash, minus two
+points of recall for plus four of precision, which makes sense: those shapes are symmetric
+and their backgrounds are random noise, so a mirror tells the head almost nothing it did
+not already have.
+
+Early stopping is a trade rather than a free win: keeping the best epoch gives up five
+points of recall and gains nine of precision, and turns a 165 second run into a 13 second
+one. Sweeping fixed run lengths on the same data shows why the loss based choice is sound:
+recall sits between 45 and 53 percent at every length from 2 to 150 epochs, while precision
+falls steadily from 49 percent at epoch 2 to 34 percent at epoch 80. There is nothing after
+the first few epochs but memorization, and the holdout loss says so at the time.
+
+**Sample renders.** Every run writes side by side PNGs to `/tmp/belo-eval-real`, the human
+boxes on the left in green and what Belo read on the right in pink, named after what went
+wrong in each. They are worth looking at, because they say something the table cannot: a
+child under a blue umbrella and a cat curled in a bathroom sink come back with tight,
+correct boxes, while two cats sprawled across a pink couch come back with three boxes that
+sit on the cats but cover two thirds of each of them, and a black cat on a dark striped sofa
+is missed completely. The failures are mostly failures of box precision and of low contrast,
+not of recognition.
 
 ### Continuous integration
 
@@ -409,17 +545,31 @@ Useful extras:
 - `npm run check:store` uses an in-memory storage double to prove box edits persist the
   stale-model flag, overlapping manifest writes serialize in order and Close flushes the latest
   box deletion. It uses only a fake `/tmp` handle and never opens a real project.
+- `npm run check:curve` runs the two decisions taken from a loss curve: which epoch a run
+  keeps, including the patience window and the tie and noise rules, and the plain-language
+  verdict shown after a run. The verdict checks assert the wording as behaviour, not as
+  prose: a memorizing run has to ask for varied angles, backgrounds and lighting, and no
+  verdict may contain the words loss, epoch, overfitting or validation, or any number.
 - `npm run check:learning` is the proof that the detector learns. It builds a synthetic
   detect project of 64 pictures with coloured shapes at known positions, extracts real
   features with the bundled MobileNet on the WASM backend, trains the head with the
-  settings a new detect project is created with, and then measures on 24 pictures it never
-  saw. The run is seeded. It currently finds 80 percent of the held out boxes with 91
-  percent of its detections right and a mean overlap of 0.69, against 100 percent on the
-  pictures it trained on. It also rebuilds each held out spatial map as the tensor handed
-  to the Use view, runs the exact Use inference seam and checks both placement and tensor
-  cleanup; 22 of 24 frames contain a correctly placed box at half overlap. It takes about
-  half a minute, and feature extraction is cached in the temp folder for reruns. Needs
-  Node 22.15 or newer.
+  settings a new detect project is created with, mirrored copies included, and then
+  measures on 24 pictures it never saw. The run is seeded. It currently finds 80 percent of
+  the held out boxes with 89 percent of its detections right and a mean overlap of 0.68,
+  against 100 percent on the pictures it trained on. It also rebuilds each held out spatial
+  map as the tensor handed to the Use view, runs the exact Use inference seam and checks
+  both placement and tensor cleanup; 21 of 24 frames contain a correctly placed box at half
+  overlap. Two further parts check the pixel transform against a hand written probe tensor,
+  and prove early stopping restores the best epoch: the holdout loss recomputed from the
+  returned weights has to equal the best loss the run recorded, and a deliberately
+  overfitting run has to stop early and hand back weights that beat the ones it ended with.
+  It takes about fifteen seconds, and feature extraction is cached in the temp folder for
+  reruns. `--compare` additionally trains the same data without mirrored copies and prints
+  both, which doubles the runtime. Needs Node 22.15 or newer.
+- `npm run eval:real` is the honest one. Everything above is either pure arithmetic or
+  coloured rectangles on striped backgrounds; this trains the real detector on real
+  photographs with boxes drawn by other people, and reports what it finds. See
+  [Detection on real photographs](#detection-on-real-photographs).
 
 ### Layout
 
@@ -435,7 +585,9 @@ src/
   components/ThumbSizePicker.tsx   the four step image grid cell size control
   lib/
     attention.ts          overlay geometry and thresholding, pure functions
+    augment.ts            training time flip and colour jitter plan, pure functions
     boxes.ts              detect mode box geometry, pure functions
+    curve.ts              which epoch a run keeps, and what to tell the person
     detect.ts             anchors, matching, offset coding, suppression, scoring
     thumbSize.ts          grid cell size, remembered per machine
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
@@ -456,6 +608,7 @@ src/
   styles/                 tokens, base, ui primitives, app layout
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
 public/models/            bundled MobileNet weights
+scripts/data/            the committed COCO photograph list eval:real trains on
 ```
 
 ### The app mark
