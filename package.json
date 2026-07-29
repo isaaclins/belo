@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "packageManager": "npm@11.11.0",
   "description": "Local image classifier trainer",
   "scripts": {
@@ -13,8 +13,10 @@
     "check:camera": "node scripts/check-camera-seam.mjs",
     "check:boxes": "node scripts/check-boxes.mjs",
     "check:detect": "node scripts/check-detect.mjs",
+    "check:curve": "node scripts/check-curve.mjs",
     "check:learning": "node scripts/check-learning.mjs",
     "check:store": "node scripts/check-store.mjs",
+    "eval:real": "node scripts/eval-real.mjs",
     "og": "node scripts/make-og.mjs",
     "icons": "node scripts/make-icon.mjs master && tauri icon src-tauri/app-icon.png --ios-color '#ffd83d' && node scripts/make-icon.mjs ios",
     "tauri": "tauri"
@@ -42,6 +44,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
+    "jpeg-js": "^0.4.4",
     "typescript": "^7.0.2",
     "vite": "^8.1.5"
   }
