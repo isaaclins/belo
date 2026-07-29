@@ -19,7 +19,9 @@
     "eval:real": "node scripts/eval-real.mjs",
     "og": "node scripts/make-og.mjs",
     "icons": "node scripts/make-icon.mjs master && tauri icon src-tauri/app-icon.png --ios-color '#ffd83d' && node scripts/make-icon.mjs ios",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check:overlay": "node scripts/check-overlay.mjs",
+    "check:camera-live": "node scripts/check-camera-live.mjs"
   },
   "repository": {
     "type": "git",

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Belo attention overlay check</title>
+    <style>
+      /* The two rules the overlay depends on, copied from app.css so the check
+         measures the same geometry the app renders. */
+      #stage {
+        position: relative;
+        width: 480px;
+        height: 480px;
+        background: #111014;
+      }
+      #stage video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .use__attn {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"><video id="feed" playsinline muted autoplay></video></div>
+    <div id="mount"></div>
+    <script type="module" src="./overlay.tsx"></script>
+  </body>
+</html>

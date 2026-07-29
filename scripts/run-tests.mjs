@@ -3,7 +3,9 @@
 //   npm test
 //
 // Each step is a normal npm script, run in its own process, one after the
-// other. They are sequential on purpose: check:learning trains a real model and
+// other. The two browser steps drive headless Chrome and report a skip on a
+// machine that has none, so the suite still passes where no browser is
+// installed. They are sequential on purpose: check:learning trains a real model and
 // wants the whole CPU, and interleaved output from parallel runs would make a
 // failure hard to read. The first failing step stops the run and its exit code
 // becomes the exit code of the suite.
@@ -17,6 +19,8 @@ const STEPS = [
   ["check:detect", "the detection layer decides the way it should"],
   ["check:curve", "a loss curve is read into the right epoch and the right words"],
   ["check:camera", "the camera seam behaves without a camera"],
+  ["check:camera-live", "a real camera session switches devices and survives a removal"],
+  ["check:overlay", "the multi label attention overlay paints what the model saw"],
   ["check:store", "the project store saves and closes correctly"],
   ["check:learning", "the detector actually learns, on the real model"],
 ];
