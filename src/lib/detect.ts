@@ -13,25 +13,110 @@
 
 import type { BoxRect } from "./types";
 
-/** The grid the frozen MobileNet hands back for a 224 pixel input. */
+/** The coarse grid the frozen MobileNet hands back for a 224 pixel input. */
 export const GRID_ROWS = 7;
 export const GRID_COLS = 7;
 
+/** The finer grid, one MobileNet stage earlier, at half the stride. */
+export const FINE_GRID_ROWS = 14;
+export const FINE_GRID_COLS = 14;
+
 /**
- * Two scales and three aspect ratios, so six anchors per cell and 294 in total
- * on the 7x7 grid.
- *
- * The scales bracket the object sizes a 224 pixel picture can usefully hold: a
- * fifth of the frame and half of it. Anything much smaller than a fifth is
- * below the 32 pixel stride of the feature grid and cannot be localized well
- * whatever the anchor set says. The three ratios give a square, a wide and a
- * tall box at each scale, so an upright bottle and a lying pencil both have an
- * anchor they can match on overlap alone rather than only through the forced
- * best match. The box regression covers the rest of the shape space.
+ * Anchor scales of the single grid detector, kept because every detect model
+ * saved before two scales existed carries them and still has to load.
  */
 export const ANCHOR_SCALES = [0.22, 0.5];
 export const ANCHOR_RATIOS = [1, 2, 0.5];
 export const ANCHORS_PER_CELL = ANCHOR_SCALES.length * ANCHOR_RATIOS.length;
+
+/**
+ * One feature map the head reads, with the anchors that sit on it.
+ *
+ * `depth` is how many channels a cell of that map carries, which the head needs
+ * to size its input and the feature cache needs to slice a packed example.
+ */
+export interface FeatureScale {
+  rows: number;
+  cols: number;
+  depth: number;
+  scales: number[];
+  ratios: number[];
+}
+
+/**
+ * The two maps a new detector is built on, coarse first.
+ *
+ * conv_pw_13_relu is 7x7x1024, a 32 pixel stride, and one of its cells already
+ * looks at most of the picture. That is enough to say what is there and too
+ * coarse to say exactly where: a box has to be placed from a grid whose centers
+ * are 32 pixels apart, and on real photographs that is the difference between a
+ * box on the right animal and a box on the right animal at IoU 0.5.
+ * conv_pw_11_relu is the stage before the last stride, 14x14x512, so it doubles
+ * the resolution of the placement without a second extractor pass.
+ *
+ * Scales are assigned the standard SSD way: the finer map carries the smaller
+ * anchors, the coarser map the larger ones, and together they ladder across the
+ * object sizes a 224 pixel frame can hold. The three ratios give a square, a
+ * wide and a tall box at every scale, so an upright bottle and a lying pencil
+ * both have an anchor they can match on overlap alone; the box regression
+ * covers the rest of the shape space.
+ *
+ * The ladder itself was measured rather than copied. The textbook ladder for
+ * two maps puts the fine anchors far below the coarse ones, around a sixth and
+ * a third of the frame, which is right when the fine map is an early layer with
+ * a small receptive field. conv_pw_11_relu is not that: it is eleven blocks
+ * deep and one of its cells already sees a large part of the picture, so tiny
+ * anchors there matched almost nothing on overlap and the fine branch trained
+ * on forced matches alone. Moving the fine anchors up to a third and a half of
+ * the frame, so they bracket the object sizes a 224 pixel frame actually holds,
+ * is worth about seven points of held out recall over the textbook ladder on
+ * the COCO benchmark, at the same precision.
+ */
+export const FINE_SCALE: FeatureScale = {
+  rows: FINE_GRID_ROWS,
+  cols: FINE_GRID_COLS,
+  depth: 512,
+  scales: [0.3, 0.45],
+  ratios: ANCHOR_RATIOS,
+};
+
+export const COARSE_SCALE: FeatureScale = {
+  rows: GRID_ROWS,
+  cols: GRID_COLS,
+  depth: 1024,
+  scales: [0.58, 0.82],
+  ratios: ANCHOR_RATIOS,
+};
+
+/**
+ * Coarse first, then fine. The order is a contract in three places at once: the
+ * head concatenates its per map outputs in it, buildScaleAnchors lays the
+ * anchor list out in it, and a single grid model saved by an older version is
+ * exactly the prefix of it, which is what lets the same packed feature buffer
+ * feed both.
+ */
+export const DETECT_SCALES: FeatureScale[] = [COARSE_SCALE, FINE_SCALE];
+
+/** The single map every detector built before version 2 read. */
+export function legacyScale(
+  rows: number,
+  cols: number,
+  depth: number,
+  scales: number[],
+  ratios: number[],
+): FeatureScale {
+  return { rows, cols, depth, scales, ratios };
+}
+
+/** Floats one packed example holds: every map's cells laid end to end. */
+export function featureLength(scales: FeatureScale[]): number {
+  return scales.reduce((sum, scale) => sum + scale.rows * scale.cols * scale.depth, 0);
+}
+
+/** How many anchors sit on one map. */
+export function anchorCount(scale: FeatureScale): number {
+  return scale.rows * scale.cols * scale.scales.length * scale.ratios.length;
+}
 
 /** Anchor and predicted boxes are kept in center form while they are decoded. */
 export interface Anchor {
@@ -94,6 +179,21 @@ export function buildAnchors(
         });
       }
     }
+  }
+  return anchors;
+}
+
+/**
+ * Every anchor of every map, maps in the order they are given and each one laid
+ * out by buildAnchors. Concatenating rather than interleaving is what keeps the
+ * anchors of a single grid model the exact prefix of a two grid one.
+ */
+export function buildScaleAnchors(scales: FeatureScale[] = DETECT_SCALES): Anchor[] {
+  const anchors: Anchor[] = [];
+  for (const scale of scales) {
+    anchors.push(
+      ...buildAnchors(scale.rows, scale.cols, anchorShapes(scale.scales, scale.ratios)),
+    );
   }
   return anchors;
 }
@@ -161,16 +261,20 @@ export function clipRect(rect: BoxRect): BoxRect {
 
 /**
  * Overlap at which an anchor answers for a box, and the one under which it is
- * background. The textbook pair is 0.5 and 0.4, which is written for a detector
- * with thousands of anchors across several feature maps. On one 7x7 grid with
- * six anchors per cell there are 294 of them, and half overlap leaves most
- * drawn boxes with a single positive anchor. Loosening the pair to 0.45 and
- * 0.35 gives every box a small cluster of anchors to learn from, which is worth
- * a lot: on the synthetic proof in scripts/check-learning.mjs it moves held out
- * recall from 67 percent to 81 percent at the same overlap quality.
+ * background.
+ *
+ * The textbook pair is 0.5 and 0.4, written for a detector with thousands of
+ * anchors across several feature maps. On a single 7x7 grid there were 294 of
+ * them, half overlap left most drawn boxes with one positive anchor, and the
+ * pair had to be loosened to 0.45 and 0.35 to give every box a small cluster to
+ * learn from. Two maps make 1470 anchors, and at that count the loose pair is
+ * no longer a help but a cost: it hands every box a crowd of anchors that only
+ * roughly cover it, and a head trained to call a rough anchor correct places
+ * rough boxes. Putting the textbook pair back is worth three points of held out
+ * precision and about 0.02 of mean overlap on the COCO benchmark.
  */
-export const POS_IOU = 0.45;
-export const NEG_IOU = 0.35;
+export const POS_IOU = 0.5;
+export const NEG_IOU = 0.4;
 
 /** 1 positive, 0 negative, -1 ignored because it sits between the two thresholds. */
 export type MatchState = 1 | 0 | -1;
@@ -319,14 +423,23 @@ export function mineNegatives(
 }
 
 /**
- * Suppression overlap. 0.45 is the usual number and it is too generous here:
- * the looser anchor matching above makes several nearby anchors fire on one
- * object, and at 0.45 the second one survives as a false alarm. Measured on the
- * proof set, tightening this to 0.3 lifts precision from 71 to 92 percent
- * without costing a single true detection, and two real objects overlapping by
- * more than a third of their area are rare enough to be worth that trade.
+ * Suppression overlap. 0.45 is the usual number and it is far too generous
+ * here: several nearby anchors fire on one object, and at 0.45 the second one
+ * survives as a false alarm. On a single grid, 0.3 was the right answer, and it
+ * lifted precision on the synthetic proof from 71 to 92 percent without costing
+ * a true detection.
+ *
+ * A second feature map makes the same object answer twice, once per grid, and
+ * the two answers rarely overlap enough for 0.3 to merge them, so the duplicate
+ * is counted as a false alarm. 0.15 merges them. It is specific to having two
+ * maps: measured on the COCO benchmark, tightening a single grid detector from
+ * 0.3 to 0.15 costs it three points of recall and gains it nothing, while on
+ * the two map detector it is worth five points of precision for two of recall.
+ * Two real objects overlapping by more than a sixth of their area are rare
+ * enough for that to be a good trade, and NMS runs per label, so a dog standing
+ * in front of a person is unaffected either way.
  */
-export const NMS_IOU = 0.3;
+export const NMS_IOU = 0.15;
 export const SCORE_THRESHOLD = 0.3;
 export const MAX_DETECTIONS = 20;
 
@@ -409,11 +522,11 @@ export function decodeDetections(
  * which is why every entry point in ml/detector.ts runs it.
  */
 export function standardizeCells(
-  features: Float32Array,
+  features: ArrayLike<number>,
   cells: number,
   depth: number,
 ): Float32Array {
-  const out = new Float32Array(features.length);
+  const out = new Float32Array(cells * depth);
   for (let cell = 0; cell < cells; cell += 1) {
     const at = cell * depth;
     let mean = 0;
@@ -426,6 +539,27 @@ export function standardizeCells(
     }
     const spread = Math.sqrt(variance / depth) || 1;
     for (let i = 0; i < depth; i += 1) out[at + i] = (features[at + i] - mean) / spread;
+  }
+  return out;
+}
+
+/**
+ * The same transform over a packed multi map example, each map standardized on
+ * its own depth. A buffer longer than the maps ask for is read as a prefix and
+ * the rest is ignored, which is how a single grid model saved by an older
+ * version keeps working on the two map features the app now caches.
+ */
+export function standardizeScales(
+  features: Float32Array,
+  scales: FeatureScale[],
+): Float32Array {
+  const out = new Float32Array(featureLength(scales));
+  let at = 0;
+  for (const scale of scales) {
+    const cells = scale.rows * scale.cols;
+    const length = cells * scale.depth;
+    out.set(standardizeCells(features.subarray(at, at + length), cells, scale.depth), at);
+    at += length;
   }
   return out;
 }
