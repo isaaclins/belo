@@ -108,11 +108,21 @@ export async function startDevServer() {
   child.stdout.on("data", collect);
   child.stderr.on("data", collect);
 
-  const url = await waitFor("the Vite dev server", () => {
-    const match = /http:\/\/127\.0\.0\.1:(\d+)\//.exec(output);
-    return match ? `http://127.0.0.1:${match[1]}` : null;
-  });
-  if (url.endsWith(":1420")) throw new Error("Vite landed on 1420, which belongs to tauri dev");
+  // Waiting on the port rather than on a log line: what Vite prints differs
+  // between platforms and versions, and its output is only useful for the error
+  // message when the server never comes up at all.
+  const url = `http://127.0.0.1:${port}`;
+  try {
+    await waitFor("the Vite dev server", () =>
+      fetch(url, { method: "GET" }).then(
+        () => true,
+        () => false,
+      ),
+    );
+  } catch (err) {
+    child.kill("SIGTERM");
+    throw new Error(`${err.message}. Vite said:\n${output.trim() || "(nothing)"}`);
+  }
 
   return {
     url,
@@ -179,6 +189,9 @@ export async function launchChrome(extraArgs = []) {
       "--mute-audio",
       "--autoplay-policy=no-user-gesture-required",
       "--window-size=1280,900",
+      // A CI container has a tiny /dev/shm and often no usable sandbox. Neither
+      // flag is wanted on a developer machine, so neither is set there.
+      ...(process.env.CI ? ["--no-sandbox", "--disable-dev-shm-usage"] : []),
       ...extraArgs,
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
