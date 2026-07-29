@@ -7,13 +7,14 @@
 // asks the same question a user asks: does it find the thing.
 //
 //   npm run eval:real                 # train and score, using the cached data
+//   npm run eval:real -- --repeat 5   # average over five seeds instead of three
 //   npm run eval:real -- --no-augment # the same run without mirrored copies
 //   npm run eval:real -- --rebuild    # rebuild the image list from COCO
 //
 // What it does:
 //
 //   1. Reads scripts/data/coco-subset.json, a committed list of COCO val2017
-//      photographs whose objects are large enough for a 7x7 grid to place, with
+//      photographs whose objects are large enough for the grid to place, with
 //      the human drawn boxes that come with them. Only the list is committed;
 //      no image data ever enters the repository.
 //   2. Downloads those photographs from images.cocodataset.org into .cache,
@@ -71,8 +72,13 @@ const MODEL_PATH = join(ROOT, "public", "models", "mobilenet-v1-1.0-224", "model
 const OUT_DIR = "/tmp/belo-eval-real";
 
 const SIZE = 224;
-const CELLS = 49;
-const DEPTH = 1024;
+// The two maps the detector reads, coarse first, exactly as ml/features.ts
+// packs them: conv_pw_13_relu at 7x7x1024 and conv_pw_11_relu at 14x14x512.
+const MAPS = [
+  { layer: "conv_pw_13_relu", cells: 49, depth: 1024 },
+  { layer: "conv_pw_11_relu", cells: 196, depth: 512 },
+];
+const PACK = MAPS.reduce((sum, map) => sum + map.cells * map.depth, 0);
 
 const ANNOTATION_URL = "http://images.cocodataset.org/annotations/annotations_trainval2017.zip";
 const IMAGE_BASE = "http://images.cocodataset.org/val2017";
@@ -104,6 +110,11 @@ const value = (name, fallback) => {
 
 const REBUILD = flag("rebuild");
 const AUGMENT = !flag("no-augment");
+// Seeds are fixed rather than drawn, so a rerun is a rerun. The first one is
+// the seed the detailed tables and the sample renders come from.
+const ALL_SEEDS = [913, 271, 5501, 88041, 4242];
+const REPEAT = Math.max(1, Math.min(ALL_SEEDS.length, Number(value("repeat", 3)) || 3));
+const SEEDS = ALL_SEEDS.slice(0, REPEAT);
 const EPOCHS = Number(value("epochs", 0)) || 0;
 const PATIENCE = Number(value("patience", 0)) || 0;
 const RENDERS = Number(value("renders", 8));
@@ -389,17 +400,28 @@ function featuresOf(extractor, pixels, side, aug) {
   return tf.tidy(() => {
     const view = resized(pixels, side, aug);
     const input = view.div(127.5).sub(1).expandDims(0);
-    return new Float32Array(extractor.predict(input).reshape([CELLS * DEPTH]).dataSync());
+    const maps = extractor.predict(input);
+    const pack = new Float32Array(PACK);
+    let at = 0;
+    maps.forEach((map, i) => {
+      pack.set(map.reshape([MAPS[i].cells * MAPS[i].depth]).dataSync(), at);
+      at += MAPS[i].cells * MAPS[i].depth;
+    });
+    return pack;
   });
 }
 
-/** Cached on disk: one MobileNet pass per photograph per variant, ever. */
+/**
+ * Cached on disk: one MobileNet pass per photograph per variant, ever. The pack
+ * size is in the file name, so adding a feature map invalidates the old files
+ * rather than silently reading half an example.
+ */
 function cachedFeatures(extractor, image, variant) {
   mkdirSync(FEATURE_DIR, { recursive: true });
-  const path = join(FEATURE_DIR, `${image.id}-v${variant}.bin`);
+  const path = join(FEATURE_DIR, `${image.id}-v${variant}-p${PACK}.bin`);
   if (existsSync(path)) {
     const buffer = readFileSync(path);
-    if (buffer.byteLength === CELLS * DEPTH * 4) {
+    if (buffer.byteLength === PACK * 4) {
       return new Float32Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
     }
   }
@@ -538,7 +560,7 @@ await tf.ready();
 const full = await tf.loadLayersModel(fileHandler(MODEL_PATH));
 const extractor = tf.model({
   inputs: full.inputs,
-  outputs: full.getLayer("conv_pw_13_relu").output,
+  outputs: MAPS.map((map) => full.getLayer(map.layer).output),
 });
 
 // Every fifth photograph is held out, exactly the way the store splits a detect
@@ -586,41 +608,59 @@ console.log(
     `${training.length} training examples after mirroring)`,
 );
 
-Math.random = mulberry32(913);
 const settings = { ...DETECT_SETTINGS, augment: AUGMENT, ...(EPOCHS ? { epochs: EPOCHS } : {}) };
-const trainStarted = Date.now();
-const run = await trainDetector({
-  samples: training,
-  // --keep-last is how the old behaviour is measured against the new one: with
-  // no holdout handed to the loop there is no early stop and no restore, so the
-  // run keeps the weights it happens to end on.
-  validation: flag("keep-last") ? undefined : holdout,
-  labelIds: LABELS,
-  settings,
-  ...(PATIENCE ? { patience: PATIENCE } : {}),
-  onProgress: (epoch) => {
-    if (epoch.epoch % 10 === 0 || epoch.epoch === 1) {
-      console.log(
-        `epoch ${String(epoch.epoch).padStart(3)}  loss ${epoch.loss.toFixed(3)}  ` +
-          `cls ${epoch.clsLoss.toFixed(3)}  loc ${epoch.locLoss.toFixed(3)}  ` +
-          `val ${epoch.valLoss === null ? "--" : epoch.valLoss.toFixed(3)}`,
-      );
-    }
-  },
-});
-const { detector } = run;
+
+/**
+ * One training run at one seed.
+ *
+ * The seed matters more than it looks. On 136 photographs the head reaches its
+ * best holdout loss within a handful of epochs and then overfits, so which
+ * epoch early stopping keeps, and therefore what the run scores, moves by
+ * several points with nothing but the weight initialization. A single run is
+ * not a measurement of a detector, it is one draw from a fairly wide
+ * distribution, which is why --repeat exists and defaults to more than one.
+ */
+async function trainAt(seed, quiet) {
+  Math.random = mulberry32(seed);
+  const trainStarted = Date.now();
+  const run = await trainDetector({
+    samples: training,
+    // --keep-last is how the old behaviour is measured against the new one: with
+    // no holdout handed to the loop there is no early stop and no restore, so the
+    // run keeps the weights it happens to end on.
+    validation: flag("keep-last") ? undefined : holdout,
+    labelIds: LABELS,
+    settings,
+    ...(PATIENCE ? { patience: PATIENCE } : {}),
+    onProgress: (epoch) => {
+      if (quiet) return;
+      if (epoch.epoch % 10 === 0 || epoch.epoch === 1) {
+        console.log(
+          `epoch ${String(epoch.epoch).padStart(3)}  loss ${epoch.loss.toFixed(3)}  ` +
+            `cls ${epoch.clsLoss.toFixed(3)}  loc ${epoch.locLoss.toFixed(3)}  ` +
+            `val ${epoch.valLoss === null ? "--" : epoch.valLoss.toFixed(3)}`,
+        );
+      }
+    },
+  });
+  run.seconds = (Date.now() - trainStarted) / 1000;
+  return run;
+}
+
+const run = await trainAt(SEEDS[0], false);
+const detector = run.detector;
 console.log(
   `trained ${run.history.length} of ${settings.epochs} epochs in ` +
-    `${((Date.now() - trainStarted) / 1000).toFixed(1)}s, kept epoch ${run.bestEpoch ?? run.history.length}` +
+    `${run.seconds.toFixed(1)}s, kept epoch ${run.bestEpoch ?? run.history.length}` +
     `${run.stoppedEarly ? " after patience ran out" : ""}`,
 );
 
-function score(set, options = {}) {
+function scoreWith(model, set, options = {}) {
   const stats = new Map(LABELS.map((id) => [id, { truth: 0, found: 0, predicted: 0 }]));
   const overlaps = [];
   const perImage = [];
   for (const sample of set) {
-    const detections = detect(detector, sample.features, options);
+    const detections = detect(model, sample.features, options);
     const matched = matchDetections(sample.boxes, detections, 0.5);
     for (const box of sample.boxes) stats.get(box.labelId).truth += 1;
     detections.forEach((detection, i) => {
@@ -652,6 +692,8 @@ function score(set, options = {}) {
     predicted,
   };
 }
+
+const score = (set, options = {}) => scoreWith(detector, set, options);
 
 const held = score(holdout);
 const seen = score(training.filter((sample) => !sample.imageId.includes("#")));
@@ -689,6 +731,42 @@ console.log(
   `\nheld out loss ${holdoutLoss?.toFixed(3)} against ${run.history[run.history.length - 1].loss.toFixed(3)} on the training set`,
 );
 
+// ---------- The same measurement, several times over ----------
+//
+// One run is one draw. This repeats it at fixed seeds and averages, which is
+// the number worth quoting: the spread between seeds is wide enough that a
+// single run can show a change as a win or a wash depending on nothing at all.
+
+if (SEEDS.length > 1) {
+  const rows = [{ seed: SEEDS[0], held, seconds: run.seconds, epochs: run.history.length }];
+  for (const seed of SEEDS.slice(1)) {
+    const other = await trainAt(seed, true);
+    rows.push({
+      seed,
+      held: scoreWith(other.detector, holdout),
+      seconds: other.seconds,
+      epochs: other.history.length,
+    });
+    other.detector.model.dispose();
+  }
+  console.log(`\n================ ${rows.length} runs, one per seed ================`);
+  for (const row of rows) {
+    console.log(
+      `  seed ${String(row.seed).padStart(6)}  found ${(row.held.recall * 100).toFixed(0)}%  ` +
+        `right ${(row.held.precision * 100).toFixed(0)}%  ` +
+        `mean overlap ${row.held.meanIoU.toFixed(3)}  ` +
+        `${row.epochs} epochs in ${row.seconds.toFixed(1)}s`,
+    );
+  }
+  const mean = (pick) => rows.reduce((sum, row) => sum + pick(row), 0) / rows.length;
+  console.log(
+    `  ${"mean".padEnd(11)}  found ${(mean((r) => r.held.recall) * 100).toFixed(1)}%  ` +
+      `right ${(mean((r) => r.held.precision) * 100).toFixed(1)}%  ` +
+      `mean overlap ${mean((r) => r.held.meanIoU).toFixed(3)}  ` +
+      `${mean((r) => r.seconds).toFixed(1)}s per run`,
+  );
+}
+
 // ---------- Sample renders ----------
 
 // The renders are named after what went wrong in them, so a rerun that gets a
@@ -724,6 +802,6 @@ console.log("  left: the boxes a person drew. right: the boxes Belo read.");
 for (const file of written) console.log(`  ${file}`);
 
 console.log(
-  `\nThis is a measurement, not a test. A low number here is a fact about a 7x7\n` +
-    `grid trained on ${trainImages.length} photographs, not a broken build.`,
+  `\nThis is a measurement, not a test. A low number here is a fact about a head\n` +
+    `trained on ${trainImages.length} photographs, not a broken build.`,
 );
