@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "packageManager": "npm@11.11.0",
   "description": "Local image classifier trainer",
   "scripts": {
