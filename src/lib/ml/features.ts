@@ -2,17 +2,35 @@
 // conv_pw_13_relu and spatially averaged, which yields a 1024 value embedding
 // per image. Weights are bundled under public/models so nothing is fetched
 // from the network at runtime.
+//
+// The detector needs a second, finer view of the same picture, so there is a
+// second truncation at conv_pw_11_relu, the stage before MobileNet's last
+// stride. Both come out of one pass: the two cuts share every layer below
+// conv_pw_12, so a model with both as outputs costs one forward pass, not two.
 
 import * as tf from "@tensorflow/tfjs";
 import { IMAGE_SIZE } from "../types";
 import { initBackend } from "./backend";
 import { isIdentity, LUMA, NO_AUGMENT, type Augment } from "../augment";
 import type { Drawable } from "../images";
+import { COARSE_SCALE, DETECT_SCALES, featureLength } from "../detect";
 
 const MODEL_URL = "/models/mobilenet-v1-1.0-224/model.json";
 const CUT_LAYER = "conv_pw_13_relu";
+const FINE_CUT_LAYER = "conv_pw_11_relu";
 
 export const FEATURE_SIZE = 1024;
+export const FINE_FEATURE_SIZE = 512;
+
+/**
+ * Floats one packed detect example holds: the 7x7x1024 map followed by the
+ * 14x14x512 one, 150528 in all. That is 588 KB per view against the 196 KB a
+ * single map cost, so the training cache of a hundred picture project grows
+ * from about 20 MB to about 59 MB, and doubles again to 118 MB when practising
+ * on mirrored copies is on. It is the price of the second grid and it is paid
+ * once per picture per run rather than once per epoch.
+ */
+export const DETECT_PACK_SIZE = featureLength(DETECT_SCALES);
 
 /**
  * Applies one training time augmentation to a [height, width, 3] pixel tensor
@@ -40,13 +58,27 @@ export function applyAugment(pixels: tf.Tensor3D, aug: Augment): tf.Tensor3D {
   });
 }
 
+let loadingFull: Promise<tf.LayersModel> | null = null;
 let loading: Promise<tf.LayersModel> | null = null;
+let loadingDetect: Promise<tf.LayersModel> | null = null;
+
+function loadFull(): Promise<tf.LayersModel> {
+  if (!loadingFull) {
+    loadingFull = (async () => {
+      await initBackend();
+      return tf.loadLayersModel(MODEL_URL);
+    })().catch((err) => {
+      loadingFull = null;
+      throw err;
+    });
+  }
+  return loadingFull;
+}
 
 export function loadFeatureModel(): Promise<tf.LayersModel> {
   if (!loading) {
     loading = (async () => {
-      await initBackend();
-      const full = await tf.loadLayersModel(MODEL_URL);
+      const full = await loadFull();
       const cut = full.getLayer(CUT_LAYER);
       const truncated = tf.model({ inputs: full.inputs, outputs: cut.output });
       // One warm-up pass so the first real capture is not the slow one.
@@ -58,6 +90,37 @@ export function loadFeatureModel(): Promise<tf.LayersModel> {
     });
   }
   return loading;
+}
+
+/**
+ * The same frozen graph with both cuts as outputs, coarse first. It shares its
+ * layers and its weights with the truncation above, so a project that trains a
+ * detector and classifies at the same time still holds one copy of MobileNet.
+ */
+export function loadDetectFeatureModel(): Promise<tf.LayersModel> {
+  if (!loadingDetect) {
+    loadingDetect = (async () => {
+      const full = await loadFull();
+      const both = tf.model({
+        inputs: full.inputs,
+        outputs: [full.getLayer(CUT_LAYER).output, full.getLayer(FINE_CUT_LAYER).output] as
+          tf.SymbolicTensor[],
+      });
+      // One warm-up pass so the first real capture is not the slow one. tidy
+      // keeps whatever a callback returns, and this one has two outputs to
+      // return, so they are disposed by hand instead.
+      const warm = tf.tidy(() => {
+        const zeros = tf.zeros([1, IMAGE_SIZE, IMAGE_SIZE, 3]);
+        return (both.predict(zeros) as tf.Tensor[]).map((t) => t.reshape([t.size]));
+      });
+      warm.forEach((t) => t.dispose());
+      return both;
+    })().catch((err) => {
+      loadingDetect = null;
+      throw err;
+    });
+  }
+  return loadingDetect;
 }
 
 /**
@@ -159,4 +222,58 @@ export async function embedWithSpatial(
 export async function embedToArray(source: Drawable): Promise<Float32Array> {
   const result = await embedWithSpatial(source, false);
   return result.pooled;
+}
+
+/** Both feature maps of one picture, packed, plus the pooled embedding. */
+export interface DetectFeatures {
+  /** DETECT_PACK_SIZE floats: the coarse map, then the fine one. */
+  pack: Float32Array;
+  pooled: Float32Array;
+}
+
+/**
+ * One MobileNet pass that yields everything a detect project needs from a
+ * picture: the coarse grid, the fine grid and the pooled embedding the
+ * classifier cache gets for free.
+ *
+ * The two maps come back as one buffer rather than two, because every consumer
+ * downstream treats them as one example: the cache stores one entry, the head
+ * slices it by scale, and a detector saved before the fine map existed simply
+ * reads the prefix.
+ */
+export async function embedDetectFeatures(
+  source: Drawable,
+  aug: Augment = NO_AUGMENT,
+): Promise<DetectFeatures> {
+  const model = await loadDetectFeatureModel();
+  // The two maps are joined on the device and read back in one transfer. Two
+  // reads would mean two round trips per frame in the Use view, and the pooled
+  // embedding is the mean of the coarse map, so it is cheaper to average the
+  // 49 rows here than to ask the device for a number it already handed over.
+  const packed = tf.tidy(() => {
+    const input = preprocess(source, aug);
+    const [coarse, fine] = model.predict(input) as tf.Tensor4D[];
+    return tf.concat([
+      coarse.reshape([coarse.size]),
+      fine.reshape([fine.size]),
+    ]) as tf.Tensor1D;
+  });
+  try {
+    const pack = (await packed.data()) as Float32Array;
+    return { pack, pooled: poolCoarse(pack) };
+  } finally {
+    packed.dispose();
+  }
+}
+
+/** Mean over the coarse map's cells, which is exactly what `embed` returns. */
+function poolCoarse(pack: Float32Array): Float32Array {
+  const cells = COARSE_SCALE.rows * COARSE_SCALE.cols;
+  const out = new Float32Array(FEATURE_SIZE);
+  for (let cell = 0; cell < cells; cell += 1) {
+    const at = cell * FEATURE_SIZE;
+    for (let i = 0; i < FEATURE_SIZE; i += 1) out[i] += pack[at + i];
+  }
+  for (let i = 0; i < FEATURE_SIZE; i += 1) out[i] /= cells;
+  return out;
 }
