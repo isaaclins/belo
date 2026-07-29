@@ -31,6 +31,14 @@ const {
   nms,
   POS_IOU,
   standardizeCells,
+  standardizeScales,
+  anchorCount,
+  buildScaleAnchors,
+  featureLength,
+  legacyScale,
+  COARSE_SCALE,
+  FINE_SCALE,
+  DETECT_SCALES,
   GRID_COLS,
   GRID_ROWS,
 } = await import(new URL("../src/lib/detect.ts", import.meta.url));
@@ -104,6 +112,103 @@ check(
   (() => {
     const rect = anchorRect({ cx: 0.5, cy: 0.25, w: 0.4, h: 0.2 });
     return near(rect.x, 0.3) && near(rect.y, 0.15) && near(rect.w, 0.4) && near(rect.h, 0.2);
+  })(),
+);
+
+// ---------- Two feature scales ----------
+//
+// The head reads a coarse map and a fine one and concatenates its answers in a
+// fixed order. Every claim that order makes is checked here, because getting it
+// wrong is the quiet kind of wrong: anchor 500 would simply mean a different
+// box on one side of the loss than on the other, and the head would still train
+// and still never learn.
+
+const scaleAnchors = buildScaleAnchors();
+
+check(
+  "the default ladder is coarse first, then fine",
+  DETECT_SCALES.length === 2 &&
+    DETECT_SCALES[0] === COARSE_SCALE &&
+    DETECT_SCALES[1] === FINE_SCALE &&
+    COARSE_SCALE.rows === 7 &&
+    FINE_SCALE.rows === 14,
+  `${DETECT_SCALES.map((s) => `${s.rows}x${s.cols}x${s.depth}`).join(", ")}`,
+);
+check(
+  "the fine map carries the smaller anchors and the coarse map the larger ones",
+  Math.max(...FINE_SCALE.scales) <= Math.min(...COARSE_SCALE.scales),
+  `fine ${FINE_SCALE.scales.join("/")} against coarse ${COARSE_SCALE.scales.join("/")}`,
+);
+check(
+  "both maps together hold every anchor, and nothing else",
+  scaleAnchors.length === anchorCount(COARSE_SCALE) + anchorCount(FINE_SCALE) &&
+    scaleAnchors.length === 7 * 7 * 6 + 14 * 14 * 6,
+  `${scaleAnchors.length}`,
+);
+check(
+  "a one map head's anchors are exactly the prefix of a two map head's",
+  (() => {
+    const alone = buildScaleAnchors([COARSE_SCALE]);
+    return (
+      alone.length === anchorCount(COARSE_SCALE) &&
+      alone.every((anchor, i) => {
+        const both = scaleAnchors[i];
+        return (
+          near(anchor.cx, both.cx) &&
+          near(anchor.cy, both.cy) &&
+          near(anchor.w, both.w) &&
+          near(anchor.h, both.h)
+        );
+      })
+    );
+  })(),
+);
+check(
+  "the fine anchors continue where the coarse ones stop, on the 14x14 grid",
+  (() => {
+    const start = anchorCount(COARSE_SCALE);
+    const fineShapes = anchorShapes(FINE_SCALE.scales, FINE_SCALE.ratios);
+    return scaleAnchors.slice(start).every((anchor, i) => {
+      const cell = Math.floor(i / fineShapes.length);
+      const shape = fineShapes[i % fineShapes.length];
+      const row = Math.floor(cell / FINE_SCALE.cols);
+      const col = cell % FINE_SCALE.cols;
+      return (
+        near(anchor.cx, (col + 0.5) / FINE_SCALE.cols) &&
+        near(anchor.cy, (row + 0.5) / FINE_SCALE.rows) &&
+        near(anchor.w, shape.w) &&
+        near(anchor.h, shape.h)
+      );
+    });
+  })(),
+);
+check(
+  "the fine grid places centers the coarse grid cannot",
+  (() => {
+    const coarse = new Set(
+      buildAnchors(COARSE_SCALE.rows, COARSE_SCALE.cols, [{ w: 1, h: 1 }]).map(
+        (a) => `${a.cx.toFixed(6)}`,
+      ),
+    );
+    const fine = buildAnchors(FINE_SCALE.rows, FINE_SCALE.cols, [{ w: 1, h: 1 }]);
+    const extra = fine.filter((a) => !coarse.has(a.cx.toFixed(6)));
+    return extra.length > 0 && FINE_SCALE.cols === COARSE_SCALE.cols * 2;
+  })(),
+);
+check(
+  "a packed example is the two maps laid end to end",
+  featureLength(DETECT_SCALES) === 49 * 1024 + 196 * 512 &&
+    featureLength([COARSE_SCALE]) === 49 * 1024,
+  `${featureLength(DETECT_SCALES)}`,
+);
+check(
+  "a stored one map head describes exactly the old grid",
+  (() => {
+    const old = legacyScale(7, 7, 1024, ANCHOR_SCALES, ANCHOR_RATIOS);
+    return (
+      anchorCount(old) === GRID_ROWS * GRID_COLS * ANCHORS_PER_CELL &&
+      featureLength([old]) === 49 * 1024
+    );
   })(),
 );
 
@@ -306,6 +411,37 @@ check(
   (() => {
     const out = standardizeCells(new Float32Array([1, 4, 2, 9]), 1, 4);
     return out[3] > out[1] && out[1] > out[2] && out[2] > out[0];
+  })(),
+);
+
+// Two maps of different depths have to be standardized on their own depth. A
+// pack standardized as one long run of 1024 wide cells would silently mix the
+// two halves of a fine cell together.
+const packScales = [
+  { rows: 1, cols: 2, depth: 4, scales: [0.2], ratios: [1] },
+  { rows: 1, cols: 2, depth: 2, scales: [0.4], ratios: [1] },
+];
+check(
+  "a packed example is standardized one map at a time, on its own depth",
+  (() => {
+    const pack = new Float32Array([1, 2, 3, 4, 10, 20, 30, 40, 5, 7, 100, 104]);
+    const out = standardizeScales(pack, packScales);
+    const coarse = standardizeCells(pack.slice(0, 8), 2, 4);
+    const fine = standardizeCells(pack.slice(8), 2, 2);
+    return (
+      out.length === 12 &&
+      coarse.every((v, i) => near(v, out[i], 1e-6)) &&
+      fine.every((v, i) => near(v, out[8 + i], 1e-6))
+    );
+  })(),
+);
+check(
+  "a head that wants one map reads the prefix of a two map pack and ignores the rest",
+  (() => {
+    const pack = new Float32Array([1, 2, 3, 4, 10, 20, 30, 40, 5, 7, 100, 104]);
+    const prefix = standardizeScales(pack, [packScales[0]]);
+    const full = standardizeScales(pack, packScales);
+    return prefix.length === 8 && prefix.every((v, i) => near(v, full[i], 1e-6));
   })(),
 );
 

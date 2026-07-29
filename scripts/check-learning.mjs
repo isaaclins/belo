@@ -48,13 +48,20 @@ const HOLDOUT_IMAGES = 24;
 
 // The bar this run has to clear. Set a little below what the head reaches, so a
 // normal run passes, and far above what a head that stopped learning could
-// reach. The run is seeded, so these numbers do not move on their own.
-const MIN_RECALL = 0.7;
-const MIN_PRECISION = 0.75;
-const MIN_LABEL_RECALL = 0.65;
-const MIN_LABEL_PRECISION = 0.7;
-const MIN_MEAN_IOU = 0.6;
-const MIN_USE_FRAME_RATE = 0.6;
+// reach. The run is seeded, so these numbers do not move on their own; the
+// margin that is left is for the float differences between one machine's WASM
+// build and another's.
+//
+// The bars were raised when the head gained its second feature map. On this set
+// the one map head reached 80 percent recall, 89 percent precision and 0.684
+// mean overlap, and the two map head reaches 98, 100 and 0.853, so the old bars
+// had stopped being able to fail.
+const MIN_RECALL = 0.85;
+const MIN_PRECISION = 0.9;
+const MIN_LABEL_RECALL = 0.8;
+const MIN_LABEL_PRECISION = 0.85;
+const MIN_MEAN_IOU = 0.75;
+const MIN_USE_FRAME_RATE = 0.85;
 
 /** Deterministic noise, so a failure here is a real one and not a bad draw. */
 function mulberry32(seed) {
@@ -71,10 +78,30 @@ const rng = mulberry32(20260728);
 // Weight initialization and batch shuffling both draw from here too.
 Math.random = rng;
 
-const { detect, detectSpatialMap, evaluateDetector, trainDetector } = await import(
-  new URL("../src/lib/ml/detector.ts", import.meta.url),
-);
-const { matchDetections, iou } = await import(new URL("../src/lib/detect.ts", import.meta.url));
+const {
+  buildDetector,
+  deserializeDetector,
+  detect,
+  detectSpatialMap,
+  DETECTOR_FORMAT_VERSION,
+  evaluateDetector,
+  serializeDetector,
+  trainDetector,
+} = await import(new URL("../src/lib/ml/detector.ts", import.meta.url));
+const {
+  matchDetections,
+  iou,
+  ANCHOR_RATIOS,
+  ANCHOR_SCALES,
+  COARSE_SCALE,
+  DETECT_SCALES,
+  featureLength,
+  legacyScale,
+} = await import(new URL("../src/lib/detect.ts", import.meta.url));
+
+// The two maps the head reads, and how many floats one packed example is.
+const PACK = featureLength(DETECT_SCALES);
+const LAYERS = ["conv_pw_13_relu", "conv_pw_11_relu"];
 const { DETECT_SETTINGS } = await import(new URL("../src/lib/types.ts", import.meta.url));
 const { augmentFor, flipBoxes, NO_AUGMENT } = await import(
   new URL("../src/lib/augment.ts", import.meta.url),
@@ -220,7 +247,7 @@ const datasetRandom = Math.random;
 Math.random = mulberry32(20260729);
 const lifecycleSample = {
   imageId: "lifecycle",
-  features: new Float32Array(49 * 1024),
+  features: new Float32Array(PACK),
   boxes: [],
 };
 const lifecycleSettings = {
@@ -272,21 +299,31 @@ check(
 Math.random = datasetRandom;
 
 const full = await tf.loadLayersModel(fileHandler(MODEL_PATH));
-const extractor = tf.model({ inputs: full.inputs, outputs: full.getLayer("conv_pw_13_relu").output });
+const extractor = tf.model({
+  inputs: full.inputs,
+  outputs: LAYERS.map((name) => full.getLayer(name).output),
+});
 
 /**
  * Exactly what features.ts does: augment the pixels, scale into -1..1, cut at
- * conv_pw_13_relu. The synthetic painter works in 0..1 and the app works in
- * 0..255, so the pixels are scaled up before applyAugment sees them and the
- * transform here is the one the app applies, not an approximation of it.
+ * both layers and pack the two maps coarse first. The synthetic painter works
+ * in 0..1 and the app works in 0..255, so the pixels are scaled up before
+ * applyAugment sees them and the transform here is the one the app applies, not
+ * an approximation of it.
  */
 function featuresFor(pixels, aug = NO_AUGMENT) {
   return tf.tidy(() => {
     const raw = tf.tensor3d(pixels, [SIZE, SIZE, 3]).mul(255);
     const varied = applyAugment(raw, aug);
     const input = varied.div(127.5).sub(1).expandDims(0);
-    const activation = extractor.predict(input);
-    return activation.reshape([49 * 1024]).dataSync().slice();
+    const maps = extractor.predict(input);
+    const pack = new Float32Array(PACK);
+    let at = 0;
+    for (const map of maps) {
+      pack.set(map.reshape([map.size]).dataSync(), at);
+      at += map.size;
+    }
+    return pack;
   });
 }
 
@@ -535,10 +572,10 @@ const trainScore = evaluate(samples);
 const score = evaluate(holdout);
 
 // This is the Use view seam, not a second decoding fixture: each cached map is
-// rebuilt as the [49, 1024] tensor embedWithSpatial hands the store, then sent
-// through detectSpatialMap before the same IoU matcher checks the rendered box
-// list. The tensor count before and after also proves the caller-owned map can
-// be disposed every tick without accumulating one per frame.
+// rebuilt as the packed tensor features.ts hands the store, then sent through
+// detectSpatialMap before the same IoU matcher checks the rendered box list.
+// The tensor count before and after also proves the caller-owned map can be
+// disposed every tick without accumulating one per frame.
 function evaluateUsePath(set) {
   const tensorsBefore = tf.memory().numTensors;
   const started = performance.now();
@@ -546,7 +583,7 @@ function evaluateUsePath(set) {
   let boxesHit = 0;
   const overlaps = [];
   for (const picture of set) {
-    const cells = tf.tensor2d(picture.features, [49, 1024]);
+    const cells = tf.tensor2d(picture.features, [PACK / 512, 512]);
     let detections;
     try {
       detections = detectSpatialMap(detector, cells);
@@ -656,10 +693,130 @@ check(
 check(
   "a picture with nothing in it stays quiet",
   (() => {
-    const empty = new Float32Array(49 * 1024);
+    const empty = new Float32Array(PACK);
     return detect(detector, empty).length === 0;
   })(),
 );
+
+// ---------- Saving and reloading, both formats ----------
+//
+// A detect model saved by an older version reads one 7x7 map. It has to keep
+// loading and keep answering exactly what it used to, on the packed features
+// the app now caches, because the alternative is that upgrading Belo silently
+// breaks every detect project that was already trained.
+
+{
+  const stored = serializeDetector(detector);
+  check(
+    "a new detect model is written in format 2 and names both maps",
+    stored.formatVersion === DETECTOR_FORMAT_VERSION &&
+      stored.formatVersion === 2 &&
+      stored.featureScales?.length === 2 &&
+      stored.featureScales[0].rows === 7 &&
+      stored.featureScales[1].rows === 14,
+    `version ${stored.formatVersion}, ${stored.featureScales?.length} maps`,
+  );
+  check(
+    "format 2 still fills in the format 1 fields with the coarse map",
+    stored.rows === 7 && stored.cols === 7 && stored.scales.join() === COARSE_SCALE.scales.join(),
+    `${stored.rows}x${stored.cols} ${stored.scales.join("/")}`,
+  );
+
+  const reloaded = deserializeDetector(JSON.parse(JSON.stringify(stored)));
+  const sample = holdout[0];
+  const before = detect(detector, sample.features);
+  const after = reloaded === null ? [] : detect(reloaded, sample.features);
+  check(
+    "a saved two map model comes back reading exactly the same boxes",
+    reloaded !== null &&
+      before.length === after.length &&
+      before.every((box, i) => {
+        const other = after[i];
+        return (
+          box.labelId === other.labelId &&
+          Math.abs(box.score - other.score) < 1e-6 &&
+          Math.abs(box.x - other.x) < 1e-6 &&
+          Math.abs(box.w - other.w) < 1e-6
+        );
+      }),
+    `${before.length} boxes against ${after.length}`,
+  );
+  reloaded?.model.dispose();
+
+  // A genuine format 1 file: one map, the old anchor set, no featureScales key,
+  // and the six weight tensors a single branch head has.
+  const old = buildDetector(LABELS, DETECT_SETTINGS.hiddenUnits, [
+    legacyScale(7, 7, 1024, ANCHOR_SCALES, ANCHOR_RATIOS),
+  ]);
+  const oldFile = {
+    formatVersion: 1,
+    labelIds: LABELS,
+    featureSize: 1024,
+    rows: 7,
+    cols: 7,
+    scales: ANCHOR_SCALES,
+    ratios: ANCHOR_RATIOS,
+    headWidth: DETECT_SETTINGS.hiddenUnits,
+    weights: old.model.getWeights().map((w) => ({
+      shape: w.shape.slice(),
+      values: Array.from(w.dataSync()),
+    })),
+  };
+  const oldBoxes = detect(old, sample.features);
+  old.model.dispose();
+
+  const restored = deserializeDetector(oldFile);
+  check(
+    "a format 1 detect model still loads",
+    restored !== null &&
+      restored.featureScales.length === 1 &&
+      restored.featureLength === 49 * 1024 &&
+      restored.anchors.length === 294,
+    restored === null
+      ? "it did not load"
+      : `${restored.featureScales.length} map, ${restored.anchors.length} anchors`,
+  );
+  check(
+    "format 1 weights are six tensors and they all fit",
+    oldFile.weights.length === 6,
+    `${oldFile.weights.length}`,
+  );
+  const restoredBoxes = restored === null ? [] : detect(restored, sample.features);
+  check(
+    "a format 1 model reads the same boxes off the packed features as it always did",
+    oldBoxes.length === restoredBoxes.length &&
+      oldBoxes.every((box, i) => {
+        const other = restoredBoxes[i];
+        return (
+          box.labelId === other.labelId &&
+          Math.abs(box.score - other.score) < 1e-6 &&
+          Math.abs(box.x - other.x) < 1e-6 &&
+          Math.abs(box.h - other.h) < 1e-6
+        );
+      }),
+    `${oldBoxes.length} boxes against ${restoredBoxes.length}`,
+  );
+  check(
+    "a format 1 model is happy with a pack longer than the one map it wants",
+    restored !== null &&
+      detectSpatialMap(restored, sample.features).length === restoredBoxes.length,
+  );
+  restored?.model.dispose();
+
+  // Two maps make five times the anchors and about half again as many head
+  // parameters. Both are worth printing: the anchors are what the loss and the
+  // decoder walk every step, the parameters are what a phone has to hold.
+  const params = (model) => model.getWeights().reduce((sum, w) => sum + w.size, 0);
+  const oneMap = buildDetector(LABELS, DETECT_SETTINGS.hiddenUnits, [COARSE_SCALE]);
+  console.log(
+    `\nhead size at ${DETECT_SETTINGS.hiddenUnits} units and ${LABELS.length} labels: ` +
+      `${params(oneMap.model).toLocaleString()} parameters on one map, ` +
+      `${params(detector.model).toLocaleString()} on two ` +
+      `(${(params(detector.model) / params(oneMap.model)).toFixed(2)}x), ` +
+      `${oneMap.anchors.length} anchors against ${detector.anchors.length}`,
+  );
+  oneMap.model.dispose();
+}
 
 // ---------- Early stopping, forced ----------
 //
