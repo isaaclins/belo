@@ -15,7 +15,7 @@
 
 import { createRoot } from "react-dom/client";
 import { AttentionOverlay } from "../../src/components/AttentionOverlay";
-import { boxPixels, cropSquare, heat, hotBox, mapRange } from "../../src/lib/attention";
+import { boxPixels, cropSquare, heat, HOT_RATIO, hotBox, mapRange } from "../../src/lib/attention";
 import { camera } from "../../src/lib/capture";
 import { useStore } from "../../src/lib/store";
 import { MULTI_THRESHOLD } from "../../src/lib/types";
@@ -124,6 +124,27 @@ function paintedFor(canvas: HTMLCanvasElement, hex: string): Painted {
     found.maxY = Math.max(found.maxY, y);
   }
   return found;
+}
+
+/**
+ * Column of the center of mass of the hot cells, the ones the box is thresholded
+ * on. The box bounds themselves are a poor side test: a hot region that reaches
+ * into both halves gives a box centered on the frame no matter where its mass
+ * sits, which is exactly the knife edge this avoids.
+ */
+function hotCenterCol(values: number[], rows: number, cols: number): number {
+  const range = mapRange(values);
+  let mass = 0;
+  let sum = 0;
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const value = heat(values[row * cols + col] ?? 0, range);
+      if (value < HOT_RATIO) continue;
+      mass += value;
+      sum += value * (col + 0.5);
+    }
+  }
+  return mass > 0 ? sum / mass : -1;
 }
 
 /** Mean heat in the left and the right half of one label's score map. */
@@ -327,11 +348,11 @@ async function main() {
           count: drawn.count,
         },
       );
-      const center = (drawn.minX + drawn.maxX) / 2;
+      const hotCol = hotCenterCol(map.values, grid.rows, grid.cols);
       check(
-        `${arrangement}: the painted ${name} box sits in the ${wanted[map.labelId]} half`,
-        (center < splitX ? "left" : "right") === wanted[map.labelId],
-        { center: Math.round(center), splitX: Math.round(splitX) },
+        `${arrangement}: the ${name} box is built on hot cells in the ${wanted[map.labelId]} half`,
+        (hotCol < grid.cols / 2 ? "left" : "right") === wanted[map.labelId],
+        { hotCol: hotCol.toFixed(2), cols: grid.cols, cells },
       );
     }
   }
