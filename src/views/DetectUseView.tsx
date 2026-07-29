@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BoundingBox,
   Brain,
+  CircleNotch,
   FloppyDisk,
   Image as ImageIcon,
   Play,
@@ -77,6 +78,7 @@ function DetectionList({ detections }: { detections: Detection[] }) {
 export function DetectUseView() {
   const hasModel = useStore((state) => state.hasModel);
   const stale = useStore((state) => state.stale);
+  const autoRetraining = useStore((state) => state.autoRetraining);
   const manifest = useStore((state) => state.manifest);
   const setView = useStore((state) => state.setView);
   const toast = useStore((state) => state.toast);
@@ -371,7 +373,12 @@ export function DetectUseView() {
         ) : null}
       </section>
 
-      {stale ? (
+      {autoRetraining ? (
+        <p className="use__flag use__flag--calm">
+          <CircleNotch size={14} weight="bold" className="spin" /> Retraining with your latest
+          boxes. Keep going, the current detector stays live until the new one is ready.
+        </p>
+      ) : stale ? (
         <p className="use__flag">New pictures or boxes were added since training. This detector still runs the older model.</p>
       ) : null}
     </div>

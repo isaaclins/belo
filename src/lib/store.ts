@@ -38,6 +38,7 @@ import {
 } from "./images";
 import { initBackend } from "./ml/backend";
 import { augmentFor, flipBoxes, VARIANTS } from "./augment";
+import { autoRetrainAllowed, createRetrainScheduler } from "./retrain";
 import {
   embedDetectFeatures,
   embedToArray,
@@ -244,7 +245,6 @@ interface State {
   /** Detect mode: retags one box, for when it was drawn with the wrong label. */
   setBoxLabel: (imageId: string, boxId: string, labelId: string) => void;
   removeBox: (imageId: string, boxId: string) => void;
-
   updateSettings: (patch: Partial<TrainSettings>) => void;
   startTraining: () => Promise<void>;
   stopTraining: () => void;
@@ -290,9 +290,6 @@ let detector: Detector | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveInFlight: Promise<void> | null = null;
 
-/** How long the app waits after the last correction before retraining itself. */
-const AUTO_RETRAIN_DELAY_MS = 4000;
-
 type RunMode = "manual" | "auto";
 
 interface TrainRun {
@@ -302,9 +299,6 @@ interface TrainRun {
 }
 
 let currentRun: TrainRun | null = null;
-let autoTimer: ReturnType<typeof setTimeout> | null = null;
-/** Set when feedback lands while a run is already going, so it retries after. */
-let autoQueued = false;
 
 const idleTrainState: TrainState = {
   phase: "idle",
@@ -398,9 +392,9 @@ function errorText(err: unknown): string {
 }
 
 export const useStore = create<State>((set, get) => {
-  const touch = (patch: Partial<ProjectManifest>) => {
+  const touch = (patch: Partial<ProjectManifest>): ProjectManifest | null => {
     const manifest = get().manifest;
-    if (!manifest) return;
+    if (!manifest) return null;
     const next: ProjectManifest = {
       ...manifest,
       ...patch,
@@ -408,6 +402,7 @@ export const useStore = create<State>((set, get) => {
     };
     set({ manifest: next, dirty: true });
     scheduleSave();
+    return next;
   };
 
   const scheduleSave = () => {
@@ -421,7 +416,7 @@ export const useStore = create<State>((set, get) => {
   // to go. Everything else only makes the model out of date, which is worth a
   // warning but not worth throwing away a working classifier.
   const dropModel = () => {
-    cancelAutoRetrain();
+    retrain.cancel();
     if (currentRun) currentRun.stop = true;
     head?.dispose();
     head = null;
@@ -436,10 +431,19 @@ export const useStore = create<State>((set, get) => {
   };
 
   const markStale = () => {
-    if (currentRun) currentRun.stop = true;
+    // A background run is disposable and describes the dataset from before
+    // this edit, so stop it. A manual run keeps ownership until it finishes;
+    // its final project-change check refuses stale weights, while the automatic
+    // run waits behind it and folds this edit in afterwards.
+    if (currentRun?.mode === "auto") currentRun.stop = true;
     if (!get().hasModel) return;
     touch({ modelStale: true });
     set({ stale: true });
+    // A detect project has no live corrections to fold in, so the dataset
+    // itself is the trigger: a box drawn, moved, retagged, removed or undone,
+    // and pictures added or deleted. Classify projects keep scheduling from
+    // the Use view instead, where a correction is an explicit act.
+    if (get().manifest?.mode === "detect") retrain.schedule();
   };
 
   /** Loads and caches the embedding for one stored image. */
@@ -607,50 +611,151 @@ export const useStore = create<State>((set, get) => {
   };
 
   /**
-   * One detection training run. Manual only: a detect project has no live
-   * corrections to fold in, so there is nothing for a background run to do.
+   * Puts a checkpointed classifier head back in place. Returns the labels it
+   * answers with, or null when the stored head no longer fits the project.
+   *
+   * Neither revert loads the frozen extractor. Restoring weights does not need
+   * it, opening a project with a model already pulled it in, and both embedding
+   * paths load it on demand anyway, so waiting for it here would only delay the
+   * one thing the person asked for.
    */
-  const executeDetectRun = async (run: TrainRun, manifest: ProjectManifest, path: string) => {
+  const revertHead = async (text: string, manifest: ProjectManifest): Promise<string[] | null> => {
+    const parsed = JSON.parse(text) as StoredHead;
+    const restored = deserializeHead(parsed, manifest.settings);
+    if (!restored) return null;
+    head?.dispose();
+    head = restored;
+    return parsed.labelIds;
+  };
+
+  /** The same for a detection head. */
+  const revertDetector = async (text: string): Promise<string[] | null> => {
+    const parsed = JSON.parse(text) as StoredDetector;
+    const restored = deserializeDetector(parsed);
+    if (!restored) return null;
+    detector?.model.dispose();
+    detector = restored;
+    return parsed.labelIds;
+  };
+
+  /**
+   * Copies the model a background run is about to replace into its checkpoint
+   * file, and remembers what that model was in the manifest, so the Train view
+   * can put it back with one press. A classify project keeps its head at
+   * model/head.prev.json, a detect project its detector at
+   * model/detect.prev.json; neither can be written by a manual run, so the
+   * revert action always means "undo what the app did on its own".
+   */
+  const keepCheckpoint = async (
+    path: string,
+    mode: ProjectMode,
+    snapshot: ProjectManifest,
+  ): Promise<ProjectManifest | null> => {
+    const detect = mode === "detect";
+    try {
+      const [previous, oldCheckpoint] = await Promise.all([
+        detect ? storage.readDetector(path) : storage.readModel(path),
+        detect ? storage.readDetectorCheckpoint(path) : storage.readCheckpoint(path),
+      ]);
+      if (!previous) throw new Error("The current model file is missing");
+
+      if (detect) await storage.writeDetectorCheckpoint(path, previous);
+      else await storage.writeCheckpoint(path, previous);
+
+      // Reading and writing the checkpoint yield to the UI. If an edit landed
+      // in that gap, put the checkpoint file back exactly as it was and let the
+      // queued run try again. Never replace live weights without a matching
+      // checkpoint and metadata from the same dataset snapshot.
+      if (get().path !== path || get().manifest !== snapshot) {
+        if (detect) {
+          if (oldCheckpoint) await storage.writeDetectorCheckpoint(path, oldCheckpoint);
+          else await storage.clearDetectorCheckpoint(path);
+        } else if (oldCheckpoint) {
+          await storage.writeCheckpoint(path, oldCheckpoint);
+        } else {
+          await storage.clearCheckpoint(path);
+        }
+        return null;
+      }
+
+      const checkpointed = touch({ checkpoint: snapshot.model });
+      if (!checkpointed) return null;
+      set({ hasCheckpoint: true });
+      return checkpointed;
+    } catch (err) {
+      get().toast(`Could not save a checkpoint: ${errorText(err)}`, "bad");
+      return null;
+    }
+  };
+
+  /**
+   * One detection training run.
+   *
+   * A manual run drives the whole Train view. A background run does the same
+   * work quietly: no progress writes, no toasts, a checkpoint of the detector
+   * it is about to replace, and the live Use view keeps detecting with the
+   * current one until the new weights are in.
+   */
+  const executeDetectRun = async (
+    run: TrainRun,
+    manifest: ProjectManifest,
+    path: string,
+    auto: boolean,
+  ) => {
     const { labelIds, boxedCount, training, holdout } = detectSet(manifest);
 
     if (labelIds.length === 0) {
-      get().toast("Draw a box on a picture before training", "bad");
+      if (!auto) get().toast("Draw a box on a picture before training", "bad");
       return;
     }
     if (boxedCount < DETECT_MIN_IMAGES) {
-      get().toast(`Draw boxes on at least ${DETECT_MIN_IMAGES} pictures first`, "bad");
+      if (!auto) get().toast(`Draw boxes on at least ${DETECT_MIN_IMAGES} pictures first`, "bad");
       return;
     }
+
+    // The manifest the run started from. A run's own checkpoint write replaces
+    // this object once, so the expected reference moves with it; any other
+    // replacement means the boxes changed underneath and the weights this run
+    // is producing describe a dataset that no longer exists.
+    let expectedManifest = manifest;
+    const moved = () => get().path !== path || get().manifest !== expectedManifest;
 
     // Augmented copies are training pictures too, and the reading bar counts
     // extractor passes, so they belong in the total.
     const variants = manifest.settings.augment ? VARIANTS : 0;
     const total = training.length * (1 + variants) + holdout.length;
-    set({
-      train: {
-        ...idleTrainState,
-        phase: "reading",
-        message: "Loading the feature extractor",
-        total,
-      },
-    });
+    if (auto) set({ autoRetraining: true });
+    else {
+      set({
+        train: {
+          ...idleTrainState,
+          phase: "reading",
+          message: "Loading the feature extractor",
+          total,
+        },
+      });
+    }
 
     let trained: Detector | null = null;
     try {
       const backend = await initBackend();
       set({ backend });
       await loadDetectFeatureModel();
-      set((s) => ({ train: { ...s.train, message: "Reading pictures" } }));
+      if (!auto) set((s) => ({ train: { ...s.train, message: "Reading pictures" } }));
 
-      const mark = (done: number) => set((s) => ({ train: { ...s.train, done } }));
+      const mark = (done: number) => {
+        if (!auto) set((s) => ({ train: { ...s.train, done } }));
+      };
       const samples = await readSamples(training, run, mark, 0, variants);
       // The holdout is never augmented. It stands in for pictures the person
       // will actually point the camera at, and those are not mirrored.
       const validation = await readSamples(holdout, run, mark, samples.length, 0);
 
-      set((s) => ({
-        train: { ...s.train, phase: "training", message: "Training the detector", done: 0 },
-      }));
+      if (!auto) {
+        set((s) => ({
+          train: { ...s.train, phase: "training", message: "Training the detector", done: 0 },
+        }));
+      }
 
       const result = await trainDetector({
         samples,
@@ -659,6 +764,10 @@ export const useStore = create<State>((set, get) => {
         settings: manifest.settings,
         shouldStop: () => run.stop,
         onProgress: (epoch) => {
+          // A background run reports nothing per epoch. Its whole curve is
+          // handed to the Train view in one write at the end instead, which is
+          // 150 renders the live camera does not have to share a frame with.
+          if (auto) return;
           set((s) => ({
             train: {
               ...s.train,
@@ -683,19 +792,35 @@ export const useStore = create<State>((set, get) => {
       trained = result.detector;
 
       if (run.stop) throw new Error("Training cancelled");
-      if (get().path !== path || get().manifest?.updatedAt !== manifest.updatedAt) {
+      // A box drawn while the run was going means the next debounced run is
+      // already on its way, so a background run bows out without a word.
+      if (moved()) {
+        if (auto) return;
         throw new Error("The project changed during training. Train again.");
       }
 
-      set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each picture" } }));
+      if (!auto) {
+        set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each picture" } }));
+      }
       // Never score on an augmented copy: it has no file on disk to draw the
       // result over, and a mirrored picture is not one the person owns.
       const scoredSet =
         validation.length > 0 ? validation : samples.filter((sample) => !sample.imageId.includes("#"));
       const scored = scoreDetections(scoredSet, labelIds, trained);
 
+      // Keep what is about to be replaced, so one tap can undo a silent run.
+      // Recording it writes the checkpoint metadata into the manifest, which is
+      // this run's own change and not somebody else's. If the checkpoint could
+      // not be written, the current detector remains untouched.
+      if (auto) {
+        const checkpointed = await keepCheckpoint(path, "detect", manifest);
+        if (!checkpointed) return;
+        expectedManifest = checkpointed;
+      }
+
       await storage.writeDetector(path, JSON.stringify(serializeDetector(trained)));
-      if (run.stop || get().path !== path || get().manifest?.updatedAt !== manifest.updatedAt) {
+      if (run.stop || moved()) {
+        if (auto) return;
         throw new Error("The project changed during training. Train again.");
       }
 
@@ -733,11 +858,11 @@ export const useStore = create<State>((set, get) => {
         train: {
           ...s.train,
           phase: "done",
-          message: "Ready to use",
+          message: auto ? "Refreshed in the background" : "Ready to use",
           accuracy: recall,
           valAccuracy: null,
           detect: {
-            epochs: s.train.detect?.epochs ?? [],
+            epochs: auto ? result.history : (s.train.detect?.epochs ?? []),
             stats: scored.stats,
             verdicts: scored.verdicts,
             meanIoU: scored.meanIoU,
@@ -752,7 +877,11 @@ export const useStore = create<State>((set, get) => {
       }));
       await get().saveNow();
     } catch (err) {
-      if (run.stop) {
+      if (auto) {
+        // A cancelled or failed background run is not worth a red banner: the
+        // old detector is still live and the next change tries again.
+        if (!run.stop) get().toast(`Background retraining stopped: ${errorText(err)}`, "bad");
+      } else if (run.stop) {
         if (get().path === path) {
           set({ train: { ...idleTrainState, message: "Training stopped" } });
         }
@@ -762,6 +891,7 @@ export const useStore = create<State>((set, get) => {
       }
     } finally {
       trained?.model.dispose();
+      if (auto) set({ autoRetraining: false });
     }
   };
 
@@ -779,7 +909,7 @@ export const useStore = create<State>((set, get) => {
     // different loss, a different loop and a different set of results. The
     // classifier path below never sees one.
     if (manifest.mode === "detect") {
-      if (!auto) await executeDetectRun(run, manifest, path);
+      await executeDetectRun(run, manifest, path, auto);
       return;
     }
     const { labelIds, samples } = trainingSet(manifest);
@@ -863,15 +993,10 @@ export const useStore = create<State>((set, get) => {
 
       // Keep what is about to be replaced, so one tap can undo a silent run.
       if (auto) {
-        try {
-          const previous = await storage.readModel(path);
-          if (previous) {
-            await storage.writeCheckpoint(path, previous);
-            touch({ checkpoint: get().manifest?.model ?? null });
-            set({ hasCheckpoint: true });
-          }
-        } catch (err) {
-          get().toast(`Could not save a checkpoint: ${errorText(err)}`, "bad");
+        const checkpointed = await keepCheckpoint(path, mode, manifest);
+        if (!checkpointed) {
+          result.model.dispose();
+          return;
         }
       }
 
@@ -947,38 +1072,24 @@ export const useStore = create<State>((set, get) => {
     currentRun = run;
     run.done = executeRun(run).finally(() => {
       if (currentRun === run) currentRun = null;
-      if (autoQueued) {
-        autoQueued = false;
-        scheduleAutoRetrain();
-      }
+      retrain.finished();
     });
     return run.done;
   };
 
-  const cancelAutoRetrain = () => {
-    if (autoTimer) clearTimeout(autoTimer);
-    autoTimer = null;
-    autoQueued = false;
-  };
-
   /**
-   * Debounced background retrain. Called whenever the user confirms or corrects
-   * a prediction, so a burst of taps produces exactly one run.
+   * Debounced background retrain. Fired by a Use view correction in a classify
+   * project and by any change to the boxes in a detect one, so a burst of
+   * either produces exactly one run. The policy itself lives in lib/retrain.ts
+   * and is checked in node.
    */
-  const scheduleAutoRetrain = () => {
-    if (!get().hasModel) return;
-    if (autoTimer) clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => {
-      autoTimer = null;
-      if (!get().hasModel || !get().path) return;
-      if (currentRun) {
-        // A manual run owns the model right now, try again once it is done.
-        autoQueued = true;
-        return;
-      }
+  const retrain = createRetrainScheduler({
+    ready: () => Boolean(get().path) && autoRetrainAllowed(get().manifest, get().hasModel),
+    busy: () => currentRun !== null,
+    start: () => {
       void beginRun("auto");
-    }, AUTO_RETRAIN_DELAY_MS);
-  };
+    },
+  });
 
   const writeImageRecord = async (
     jpegBase64: string,
@@ -1136,7 +1247,9 @@ export const useStore = create<State>((set, get) => {
               }
             }
           }
-          if (get().path === path) set({ hasCheckpoint: false });
+          if (get().path === path) {
+            set({ hasCheckpoint: await storage.hasDetectorCheckpoint(path) });
+          }
           return;
         }
 
@@ -1491,7 +1604,7 @@ export const useStore = create<State>((set, get) => {
         markStale();
         // Corrections from the Use view fold themselves in without a trip to
         // the Train view, once the taps stop coming.
-        if (origin === "feedback") scheduleAutoRetrain();
+        if (origin === "feedback") retrain.schedule();
         return true;
       } catch (err) {
         get().toast(errorText(err), "bad");
@@ -1547,7 +1660,7 @@ export const useStore = create<State>((set, get) => {
         },
       });
       // Same rule as a Use view correction: one debounced run folds in a burst.
-      scheduleAutoRetrain();
+      retrain.schedule();
     },
 
     toggleImageLabels(imageIds, labelId) {
@@ -1616,25 +1729,35 @@ export const useStore = create<State>((set, get) => {
     async revertModel() {
       const { path, manifest } = get();
       if (!path || !manifest) return;
-      cancelAutoRetrain();
+      const detectMode = manifest.mode === "detect";
+      retrain.cancel();
       try {
-        const text = await storage.readCheckpoint(path);
+        const text = detectMode
+          ? await storage.readDetectorCheckpoint(path)
+          : await storage.readCheckpoint(path);
+        // An old bundle simply has no checkpoint file, which is not an error:
+        // the button disappears and the current model stays where it is.
         if (!text) {
           set({ hasCheckpoint: false });
           get().toast("There is no earlier model to go back to", "bad");
           return;
         }
-        await loadFeatureModel();
-        const parsed = JSON.parse(text) as StoredHead;
-        const restored = deserializeHead(parsed, manifest.settings);
-        if (!restored) {
+        // The weights are rebuilt before anything is written, so a checkpoint
+        // that no longer fits the project leaves the live model untouched.
+        const labelIds = detectMode
+          ? await revertDetector(text)
+          : await revertHead(text, manifest);
+        if (!labelIds) {
           get().toast("The earlier model no longer fits this project", "bad");
           return;
         }
-        head?.dispose();
-        head = restored;
-        await storage.writeModel(path, text);
-        await storage.clearCheckpoint(path);
+        if (detectMode) {
+          await storage.writeDetector(path, text);
+          await storage.clearDetectorCheckpoint(path);
+        } else {
+          await storage.writeModel(path, text);
+          await storage.clearCheckpoint(path);
+        }
         // A checkpoint written for a project that had no model metadata leaves
         // nothing to restore, and keeping the newer numbers would describe the
         // wrong weights, so the honest value is none.
@@ -1643,7 +1766,7 @@ export const useStore = create<State>((set, get) => {
           hasModel: true,
           hasCheckpoint: false,
           stale: true,
-          modelLabelIds: parsed.labelIds,
+          modelLabelIds: labelIds,
           train: idleTrainState,
         });
         get().toast("Went back to the previous model", "good");

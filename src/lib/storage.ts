@@ -52,6 +52,12 @@ export interface ProjectStorage {
   hasCheckpoint(handle: string): Promise<boolean>;
   clearCheckpoint(handle: string): Promise<void>;
 
+  /** The same story for a detect project, kept in its own file. */
+  writeDetectorCheckpoint(handle: string, weights: string): Promise<void>;
+  readDetectorCheckpoint(handle: string): Promise<string | null>;
+  hasDetectorCheckpoint(handle: string): Promise<boolean>;
+  clearDetectorCheckpoint(handle: string): Promise<void>;
+
   recentProjects(): Promise<ProjectSummary[]>;
   scanProjects(dir: string): Promise<ProjectSummary[]>;
   rememberProject(handle: string, name: string): Promise<void>;
@@ -185,6 +191,14 @@ const desktopStorage: ProjectStorage = {
   hasCheckpoint: (path) => invoke("has_checkpoint", { path }),
 
   clearCheckpoint: (path) => invoke("clear_checkpoint", { path }),
+
+  writeDetectorCheckpoint: (path, weights) => invoke("write_detector_checkpoint", { path, weights }),
+
+  readDetectorCheckpoint: (path) => invoke("read_detector_checkpoint", { path }),
+
+  hasDetectorCheckpoint: (path) => invoke("has_detector_checkpoint", { path }),
+
+  clearDetectorCheckpoint: (path) => invoke("clear_detector_checkpoint", { path }),
 
   recentProjects: () => invoke("recent_projects"),
 

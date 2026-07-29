@@ -4,9 +4,10 @@
 //   MyProject.belo/
 //     project.json      manifest: labels, image records, model metadata
 //     images/*.jpg      normalized 224x224 training images
-//     model/head.json       trained classifier head weights
-//     model/head.prev.json  checkpoint of the head before the last auto retrain
-//     model/detect.json     trained detection head weights, detect projects only
+//     model/head.json         trained classifier head weights
+//     model/head.prev.json    checkpoint of the head before the last auto retrain
+//     model/detect.json       trained detection head weights, detect projects only
+//     model/detect.prev.json  checkpoint of the detector before the last auto retrain
 //
 // The manifest schema is owned by the frontend, so this layer moves strings
 // and bytes only. It never parses project.json beyond a couple of display
@@ -24,8 +25,10 @@ const BUNDLE_EXT: &str = "belo";
 const MANIFEST: &str = "project.json";
 const IMAGES_DIR: &str = "images";
 const MODEL_DIR: &str = "model";
+const MODEL_FILE: &str = "head.json";
 const CHECKPOINT_FILE: &str = "head.prev.json";
 const DETECTOR_FILE: &str = "detect.json";
+const DETECTOR_CHECKPOINT_FILE: &str = "detect.prev.json";
 const RECENTS_FILE: &str = "recents.json";
 const MAX_RECENTS: usize = 12;
 
@@ -194,83 +197,97 @@ fn delete_images(path: String, names: Vec<String>) -> Res<()> {
 
 #[tauri::command]
 fn write_model(path: String, weights: String) -> Res<()> {
-    let root = bundle_root(&path)?;
-    let dir = root.join(MODEL_DIR);
-    fs::create_dir_all(&dir).map_err(|e| fail("could not open the model folder", e))?;
-    fs::write(dir.join("head.json"), weights).map_err(|e| fail("could not write the model", e))
+    write_model_file(&path, MODEL_FILE, weights, "model")
 }
 
 #[tauri::command]
 fn read_model(path: String) -> Res<Option<String>> {
-    let root = bundle_root(&path)?;
-    let file = root.join(MODEL_DIR).join("head.json");
-    if !file.exists() {
-        return Ok(None);
-    }
-    fs::read_to_string(file)
-        .map(Some)
-        .map_err(|e| fail("could not read the model", e))
+    read_model_file(&path, MODEL_FILE, "model")
 }
 
 // A detect project trains a detection head instead of a classifier, so it gets
 // its own file next to head.json rather than sharing one.
 #[tauri::command]
 fn write_detector(path: String, weights: String) -> Res<()> {
-    let root = bundle_root(&path)?;
-    let dir = root.join(MODEL_DIR);
-    fs::create_dir_all(&dir).map_err(|e| fail("could not open the model folder", e))?;
-    fs::write(dir.join(DETECTOR_FILE), weights).map_err(|e| fail("could not write the detector", e))
+    write_model_file(&path, DETECTOR_FILE, weights, "detector")
 }
 
 #[tauri::command]
 fn read_detector(path: String) -> Res<Option<String>> {
-    let root = bundle_root(&path)?;
-    let file = root.join(MODEL_DIR).join(DETECTOR_FILE);
+    read_model_file(&path, DETECTOR_FILE, "detector")
+}
+
+// A checkpoint is a plain copy of a previous head.json or detect.json, kept so
+// an automatic background retrain can always be undone from the Train view.
+// Both kinds are moved by the same three helpers; only the file name differs.
+fn write_model_file(path: &str, name: &str, text: String, what: &str) -> Res<()> {
+    let dir = bundle_root(path)?.join(MODEL_DIR);
+    fs::create_dir_all(&dir).map_err(|e| fail("could not open the model folder", e))?;
+    fs::write(dir.join(name), text).map_err(|e| fail(&format!("could not write the {what}"), e))
+}
+
+fn read_model_file(path: &str, name: &str, what: &str) -> Res<Option<String>> {
+    let file = bundle_root(path)?.join(MODEL_DIR).join(name);
     if !file.exists() {
         return Ok(None);
     }
     fs::read_to_string(file)
         .map(Some)
-        .map_err(|e| fail("could not read the detector", e))
+        .map_err(|e| fail(&format!("could not read the {what}"), e))
 }
 
-// The checkpoint is a plain copy of a previous head.json, kept so an automatic
-// background retrain can always be undone from the Train view.
+fn clear_model_file(path: &str, name: &str, what: &str) -> Res<()> {
+    let file = bundle_root(path)?.join(MODEL_DIR).join(name);
+    if file.exists() {
+        fs::remove_file(&file).map_err(|e| fail(&format!("could not clear the {what}"), e))?;
+    }
+    Ok(())
+}
+
+fn model_file_exists(path: &str, name: &str) -> Res<bool> {
+    Ok(bundle_root(path)?.join(MODEL_DIR).join(name).exists())
+}
+
 #[tauri::command]
 fn write_checkpoint(path: String, weights: String) -> Res<()> {
-    let root = bundle_root(&path)?;
-    let dir = root.join(MODEL_DIR);
-    fs::create_dir_all(&dir).map_err(|e| fail("could not open the model folder", e))?;
-    fs::write(dir.join(CHECKPOINT_FILE), weights)
-        .map_err(|e| fail("could not write the checkpoint", e))
+    write_model_file(&path, CHECKPOINT_FILE, weights, "checkpoint")
 }
 
 #[tauri::command]
 fn read_checkpoint(path: String) -> Res<Option<String>> {
-    let root = bundle_root(&path)?;
-    let file = root.join(MODEL_DIR).join(CHECKPOINT_FILE);
-    if !file.exists() {
-        return Ok(None);
-    }
-    fs::read_to_string(file)
-        .map(Some)
-        .map_err(|e| fail("could not read the checkpoint", e))
+    read_model_file(&path, CHECKPOINT_FILE, "checkpoint")
 }
 
 #[tauri::command]
 fn has_checkpoint(path: String) -> Res<bool> {
-    let root = bundle_root(&path)?;
-    Ok(root.join(MODEL_DIR).join(CHECKPOINT_FILE).exists())
+    model_file_exists(&path, CHECKPOINT_FILE)
 }
 
 #[tauri::command]
 fn clear_checkpoint(path: String) -> Res<()> {
-    let root = bundle_root(&path)?;
-    let file = root.join(MODEL_DIR).join(CHECKPOINT_FILE);
-    if file.exists() {
-        fs::remove_file(&file).map_err(|e| fail("could not clear the checkpoint", e))?;
-    }
-    Ok(())
+    clear_model_file(&path, CHECKPOINT_FILE, "checkpoint")
+}
+
+// The detector keeps its own checkpoint beside its own weights, so a detect
+// project and a classify project never write over each other's history.
+#[tauri::command]
+fn write_detector_checkpoint(path: String, weights: String) -> Res<()> {
+    write_model_file(&path, DETECTOR_CHECKPOINT_FILE, weights, "detector checkpoint")
+}
+
+#[tauri::command]
+fn read_detector_checkpoint(path: String) -> Res<Option<String>> {
+    read_model_file(&path, DETECTOR_CHECKPOINT_FILE, "detector checkpoint")
+}
+
+#[tauri::command]
+fn has_detector_checkpoint(path: String) -> Res<bool> {
+    model_file_exists(&path, DETECTOR_CHECKPOINT_FILE)
+}
+
+#[tauri::command]
+fn clear_detector_checkpoint(path: String) -> Res<()> {
+    clear_model_file(&path, DETECTOR_CHECKPOINT_FILE, "detector checkpoint")
 }
 
 #[tauri::command]
@@ -351,7 +368,7 @@ fn summarize(path: &Path) -> ProjectSummary {
             let model_file = if value.get("mode").and_then(|v| v.as_str()) == Some("detect") {
                 DETECTOR_FILE
             } else {
-                "head.json"
+                MODEL_FILE
             };
             summary.trained = has_model_meta && path.join(MODEL_DIR).join(model_file).exists();
         }
@@ -492,6 +509,32 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn detector_checkpoint_round_trips_exact_bytes_and_clears_cleanly() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "zz-belo-detector-checkpoint-{}-{unique}.belo",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.to_string_lossy().to_string();
+        let bytes = r#"{"formatVersion":2,"weights":[0.123456789,-4.5]}"#.to_string();
+
+        assert_eq!(read_detector_checkpoint(path.clone()).unwrap(), None);
+        assert!(!has_detector_checkpoint(path.clone()).unwrap());
+
+        write_detector_checkpoint(path.clone(), bytes.clone()).unwrap();
+        assert!(has_detector_checkpoint(path.clone()).unwrap());
+        assert_eq!(read_detector_checkpoint(path.clone()).unwrap(), Some(bytes));
+
+        clear_detector_checkpoint(path.clone()).unwrap();
+        assert!(!has_detector_checkpoint(path).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -514,6 +557,10 @@ pub fn run() {
             read_checkpoint,
             has_checkpoint,
             clear_checkpoint,
+            write_detector_checkpoint,
+            read_detector_checkpoint,
+            has_detector_checkpoint,
+            clear_detector_checkpoint,
             read_file_base64,
             list_images_in_dir,
             project_summary,

@@ -9,9 +9,11 @@
 
 import { useMemo, useState } from "react";
 import {
+  ArrowCounterClockwise,
   BoundingBox,
   Check,
   CheckCircle,
+  CircleNotch,
   Lightning,
   Question,
   Sliders,
@@ -170,6 +172,9 @@ export function DetectTrainView() {
   const setView = useStore((s) => s.setView);
   const hasModel = useStore((s) => s.hasModel);
   const stale = useStore((s) => s.stale);
+  const autoRetraining = useStore((s) => s.autoRetraining);
+  const hasCheckpoint = useStore((s) => s.hasCheckpoint);
+  const revertModel = useStore((s) => s.revertModel);
   const [pickedFilter, setPickedFilter] = useState<Filter | null>(null);
 
   const labels = manifest?.labels ?? [];
@@ -250,7 +255,12 @@ export function DetectTrainView() {
               : `Draw boxes on at least ${DETECT_MIN_IMAGES} pictures first. A detector has to learn where as well as what, and ${boxed.length} picture${boxed.length === 1 ? "" : "s"} is not enough to show it.`}
           </p>
 
-          {stale ? (
+          {autoRetraining ? (
+            <p className="train__flag train__flag--calm">
+              <CircleNotch size={14} weight="bold" className="spin" /> Folding your latest boxes
+              in. The camera keeps detecting with the current model while this happens.
+            </p>
+          ) : stale ? (
             <p className="train__flag">
               The boxes changed since the last run. Train again to fold them in.
             </p>
@@ -276,6 +286,16 @@ export function DetectTrainView() {
             {train.phase === "done" ? (
               <button className="btn btn--lg btn--primary" onClick={() => setView("use")}>
                 Use it
+              </button>
+            ) : null}
+            {hasCheckpoint ? (
+              <button
+                className="btn"
+                disabled={running || autoRetraining}
+                title="Restore the detector from before the last background retrain"
+                onClick={() => void revertModel()}
+              >
+                <ArrowCounterClockwise size={16} weight="bold" /> Revert to previous model
               </button>
             ) : null}
             <div className="spacer" />
