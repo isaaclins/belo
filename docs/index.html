@@ -65,7 +65,7 @@
   <!-- ================= HERO ================= -->
   <section class="hero" id="top">
     <div class="hero__copy">
-      <p class="chip">v0.5.0 &middot; desktop and iOS</p>
+      <p class="chip">v0.7.0 &middot; desktop and iOS</p>
       <h1>Teach your machine <em>to&nbsp;see</em>.</h1>
       <p class="lead">Show Belo a few pictures of a thing. It learns to spot it. Nothing leaves your device.</p>
       <div class="cta-row">
@@ -454,10 +454,11 @@
     <div class="projects__copy">
       <h2>A project is a folder you can open</h2>
       <p class="lead">A plain folder named Project.belo. Same on Mac, Windows and Linux. Open it, copy it, back it up.</p>
-      <p>Belo writes a temp file and renames it, so a crash cannot leave half a file. No model export yet.</p>
+      <p>Belo writes a temp file and renames it, so a crash cannot leave half a file. When a trained model stops matching your labels, its files are deleted rather than left lying around.</p>
       <ul class="ticks">
         <li>One small file holds labels, pictures and settings.</li>
         <li>Deleting asks first, and only ever touches real projects.</li>
+        <li><b>Export model</b> saves one zip that runs outside Belo: the trained part, the extractor it reads, a description of the format and a page that runs it. It is a developer bundle, not a phone app.</li>
         <li>On iPhone, moving projects means a device backup for now.</li>
       </ul>
     </div>
@@ -560,7 +561,7 @@ npm run tauri build</code></pre>
     <a href="https://github.com/isaaclins/belo/blob/main/README.md">Docs</a>
     <a href="https://github.com/isaaclins/belo/blob/main/LICENSE">MIT license</a>
   </nav>
-  <p class="footer__meta">Version 0.5.0 &middot; MIT</p>
+  <p class="footer__meta">Version 0.7.0 &middot; MIT</p>
 </footer>
 
 <script src="main.js?v=2" defer></script>

@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "packageManager": "npm@11.11.0",
   "description": "Local image classifier trainer",
   "scripts": {
@@ -21,7 +21,8 @@
     "icons": "node scripts/make-icon.mjs master && tauri icon src-tauri/app-icon.png --ios-color '#ffd83d' && node scripts/make-icon.mjs ios",
     "tauri": "tauri",
     "check:overlay": "node scripts/check-overlay.mjs",
-    "check:camera-live": "node scripts/check-camera-live.mjs"
+    "check:camera-live": "node scripts/check-camera-live.mjs",
+    "check:export": "node scripts/check-export.mjs"
   },
   "repository": {
     "type": "git",

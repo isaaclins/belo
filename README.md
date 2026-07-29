@@ -54,6 +54,11 @@ detect projects show their detector's actual boxes instead.
 - **Keep projects you can back up.** On desktop, each `.belo` project is a normal folder
   containing its pictures and saved learning. You can copy or back it up like any other
   folder.
+- **Take a trained model with you.** **Export model** in the Train view saves one zip
+  holding what your project learned, the feature extractor it needs, a plain-language
+  description of every file, and a small page that runs the model on a picture you drop
+  onto it. It works for classification and for detection. It is a bundle for a developer
+  to build on, not an app you can install on a phone.
 
 ## Get Belo
 
@@ -117,7 +122,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.6.3**. Desktop, iOS and Android all build.
+Current app version: **0.7.0**. Desktop, iOS and Android all build.
 
 ## Detailed workflow
 
@@ -159,7 +164,63 @@ Current app version: **0.6.3**. Desktop, iOS and Android all build.
    the last choice is remembered. A live frame can be saved back to the project without
    boxes, ready to annotate later in Label.
 
-Model export is out of scope for this version.
+4. **Export.** **Export model** packs the current model into one zip, through the native
+   save dialog. See [Model export](#model-export).
+
+## Model export
+
+The Train view of a trained project offers **Export model**, in both classification and
+detect projects. It is disabled, with the reason written next to it, when there is no
+trained model or when the dataset changed after the last run: an export of weights that no
+longer describe the pictures would be a file nobody could interpret later.
+
+What comes out is one zip that runs anywhere a static file server does:
+
+```
+Shapes-model.zip
+  belo-export.json    what this is: mode, labels, input format, thresholds
+  classifier.json     the trained head, byte for byte the project's model/head.json
+                      (a detect project exports detector.json, its model/detect.json)
+  extractor/          the bundled MobileNet v1 (1.0, 224), 56 files, about 16 MB
+    model.json
+    group1-shard1of1 ...
+  example.html        a page that runs the model on a picture you drop on it
+  example.js          the inference path, written from the format alone
+  README.md           every field above, explained
+```
+
+Four decisions are worth stating:
+
+- **The exported format is Belo's own serialization, unconverted.** `model/head.json` and
+  `model/detect.json` are copied into the archive as they are, and the README documents
+  them field by field: the weight order, the anchor layout, the offset variances, the
+  coordinate convention and both thresholds. A converted format would be a second thing to
+  keep in step with the app and a second thing that can be wrong.
+- **The extractor travels with the model**, because the trained part reads MobileNet
+  activations rather than pixels and is useless without it. It is the same copy that ships
+  inside Belo, in the TensorFlow.js LayersModel format, so
+  `tf.loadLayersModel('extractor/model.json')` loads it.
+- **The archive is built in the webview**, in `src/lib/zip.ts`, and the Rust side only
+  writes the finished bytes to the path the save dialog returned. Everything that goes in
+  is reachable from the frontend: the weights come back through the storage seam, the
+  extractor is fetched over the same relative URL the extractor loader uses, and the text
+  files are generated. Doing it in Rust would mean a new crate, a second path to the
+  bundled model files and a different story on mobile. Entries are deflated with the
+  platform's own `CompressionStream` and stored uncompressed where there is none; both are
+  ordinary zip entries. The 16 MB extractor packs to about 16 MB, because float32 weights
+  are close to incompressible, so the whole export is about 16 to 17 MB.
+- **The example is a second implementation, not a call into Belo.** `example.js` loads the
+  extractor with TensorFlow.js from a pinned CDN URL and then does the head, the anchors,
+  the decoding and the suppression itself, in plain arithmetic over the stored arrays. That
+  is the only honest proof that the documentation is sufficient, and
+  `npm run check:export` runs exactly that code and compares it to Belo's own answers.
+
+The zip's README says to serve the folder, for example with `npx serve .`, and says plainly
+that opening `example.html` from disk cannot work, because a browser refuses to `fetch`
+the model files over `file://`.
+
+On a phone there is no save dialog to point at a folder, so an export lands next to the
+projects inside the app's own Documents folder and the toast says where it went.
 
 ## Project modes
 
@@ -352,13 +413,27 @@ Shapes.belo/
     detect.prev.json  checkpoint of the detector replaced by the last automatic retrain
 ```
 
+Those four names are the only files Belo writes into `model/`, and they are the only ones
+it will ever delete. **A model that stops being valid is deleted rather than ignored.**
+Adding or removing a label changes the head's output contract, so the stored weights
+describe a project that no longer exists and there is no honest way to map the old outputs
+onto the new label set; the weights and the checkpoint go at that moment, and the manifest
+stops claiming a model in the same edit. Opening a project cleans the same folder again: a
+file belonging to the other kind of project, weights whose label set no longer matches the
+manifest, a model file the manifest describes no model for, or a checkpoint the manifest no
+longer describes. When a live model file is removed the manifest is corrected in place,
+with `updatedAt` untouched so opening a project does not reorder the Home list. Anything
+else in `model/`, including a file somebody put there by hand, is left alone: the Rust
+command refuses any name outside those four rather than deleting it. The decisions are pure
+and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
+
 `project.json`:
 
 ```jsonc
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.6.3",
+  "appVersion": "0.7.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -447,6 +522,33 @@ itself after a confirmation that names the project and what goes with it, images
 trained model included. The Rust side refuses to delete anything that is not a `.belo`
 directory holding a `project.json`, and the currently open project cannot be deleted.
 
+## Known past anomalies
+
+Two things were seen once during this project's life, are not reproducible now, and are
+written down here rather than quietly forgotten.
+
+- **A project read "0 labels, 0 images, trained" in the Home list** while it actually had
+  labels and pictures in it. It was deleted before anybody looked at its manifest, so there
+  is no evidence left and no root cause. It is unknown whether the manifest was damaged,
+  whether the summary was read from a bundle that was mid-write, or whether the list simply
+  showed a stale entry.
+- **A recents entry disagreed with the manifest**, reporting 45 images where the project
+  held 44. Also seen once, also never explained.
+
+Neither has a fix, because neither has a cause. What exists instead are two checks in
+`npm run check:store` that pin the claims those symptoms violated: a summary taken from a
+manifest with content can never report zero labels or zero images, and a recents entry that
+disagrees with the manifest resolves to the manifest when the project is opened. The second
+one is behaviour as well as a check: `openProject` recomputes the summary from the manifest
+it just parsed and replaces the list entry with it, in `src/lib/summary.ts`, because the
+recents index and the folder scan are by construction older than the manifest the app is
+holding. `trained` is also only ever true when the manifest describes a model **and** the
+weights are on disk, on both the Rust and the frontend side, which is why the model folder
+cleanup above corrects the manifest when it deletes a live model file.
+
+If either symptom ever comes back, the thing to save is the bundle's `project.json` and the
+recents index at `<app config dir>/recents.json`, before the project is touched again.
+
 ## Development
 
 Requirements: Node 20 or newer, Rust 1.77 or newer, and the
@@ -462,24 +564,27 @@ npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
 ```
 
-Release verification. `npm test` runs all eight in this order and prints how long each one
+Release verification. `npm test` runs all nine in this order and prints how long each one
 took, which is exactly what CI does:
 
 ```bash
 npm run check:boxes       # manifest v3 and one-finger box geometry
 npm run check:detect      # anchors, loss inputs, decoding, scoring and flip geometry
 npm run check:curve       # which epoch a run keeps and what it tells you afterwards
-npm run check:store       # stale-model persistence, saves, retrain policy, checkpoint, undo
+npm run check:store       # model files, saves, retrain policy, checkpoint, undo, summaries
 npm run check:camera      # camera seam against a mocked MediaDevices
 npm run check:camera-live # a real camera session in headless Chrome, with fake devices
 npm run check:overlay     # the multi label attention overlay, trained and painted for real
+npm run check:export      # an exported model, unzipped and run outside Belo
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
 
-The two browser checks drive headless Chrome over the DevTools protocol. They never take
+The three browser checks drive headless Chrome over the DevTools protocol. They never take
 over the screen, they serve the app on a free port that is never 1420, and they report
 `skipped` instead of failing on a machine with no Chrome, which is why CI stays green
-without one. `CHROME_PATH` picks a specific browser.
+without one. `CHROME_PATH` picks a specific browser. `check:export` additionally needs the
+network, because the page it exports loads TensorFlow.js from a pinned CDN URL the way any
+exported folder does, and it skips with a message when that URL is unreachable.
 
 One more measurement is not part of `npm test`, because it downloads photographs:
 
@@ -614,8 +719,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.6.3 && git push origin
-v0.6.3`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.7.0 && git push origin
+v0.7.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -645,6 +750,20 @@ Useful extras:
   turning the overlay off has to clear the layer. The storage backend is an in-memory fake
   of the two Tauri entry points in `scripts/browser/tauri-shim.ts`; nothing in `src/` is
   changed or mocked. About five seconds.
+- `npm run check:export` is the closed loop on model export. In headless Chrome it trains a
+  real classifier and builds a real detector, exports both through the app's own export
+  path, and reports the two archives plus the answers Belo itself gives for one fixture
+  picture. Node then unzips an archive with its own reader, asserts the model, the extractor,
+  the README and the example are all in it, serves the unzipped folder on a free port the
+  way the zip's README tells a person to, loads `example.html` in the same browser and asks
+  it about the same picture. The example's answer has to match Belo's: the classifier's
+  scores within 0.01, and every detected box's corners and score within 0.01, with the same
+  number of boxes and the same labels. Measured on this machine the agreement is far tighter
+  than the bar, around 1e-7, which is what you would expect from two implementations of the
+  same arithmetic rather than two implementations of the same idea. The detector under test
+  is freshly built rather than trained, because what is being compared is arithmetic and not
+  accuracy, and a fresh head at a 0.05 cutoff produces twenty boxes to disagree over. About
+  six seconds, and it needs the network for the pinned TensorFlow.js CDN URL.
 - `npm run check:boxes` runs the detect mode box seam: drawing in every direction, moving
   against the edges of the picture, all eight resize grips, and a save and reopen round
   trip of version 1, 2 and 3 manifests.
@@ -656,8 +775,14 @@ Useful extras:
   prefix of a two map head's, and a head that wants one map reads the prefix of a packed
   example and ignores the rest. No TensorFlow, no DOM.
 - `npm run check:store` uses an in-memory storage double to prove box edits persist the
-  stale-model flag, overlapping manifest writes serialize in order and Close flushes the latest
-  box deletion. It uses only a fake `/tmp` handle and never opens a real project.
+  stale-model flag, overlapping manifest writes serialize in order and Close flushes the
+  latest box deletion. It also covers the model folder: every case of the cleanup plan as
+  pure arithmetic, then the same rules through the store, so adding a label really deletes
+  the head and its checkpoint and opening a project really removes an incompatible detector
+  and the foreign head files while leaving a file Belo does not own untouched. Two more pin
+  the claims under [Known past anomalies](#known-past-anomalies), and four pin the stored
+  weight layout the export documents, tensor shape by tensor shape. It uses only a fake
+  `/tmp` handle and never opens a real project.
 - `npm run check:curve` runs the two decisions taken from a loss curve: which epoch a run
   keeps, including the patience window and the tie and noise rules, and the plain-language
   verdict shown after a run. The verdict checks assert the wording as behaviour, not as
@@ -704,6 +829,11 @@ src/
     attention.ts          overlay geometry and thresholding, pure functions
     augment.ts            training time flip and colour jitter plan, pure functions
     boxes.ts              detect mode box geometry, pure functions
+    hygiene.ts            which model files have gone dead, pure functions
+    summary.ts            what the Home list says about a project, pure functions
+    zip.ts                the zip writer the model export packs into
+    exportModel.ts        assembling one export: weights, extractor, docs, example
+    exportFiles.ts        the README, page and inference code that travel in the zip
     curve.ts              which epoch a run keeps, and what to tell the person
     detect.ts             anchors, matching, offset coding, suppression, scoring
     thumbSize.ts          grid cell size, remembered per machine
