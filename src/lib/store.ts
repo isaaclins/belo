@@ -62,6 +62,8 @@ import {
 } from "./ml/detector";
 import { modelFilesFor, OWNED_MODEL_FILES, planModelDir } from "./hygiene";
 import { reconcileRecents, summarizeManifest } from "./summary";
+import { buildExportBundle, exportFileName } from "./exportModel";
+import { bytesToBase64 } from "./zip";
 import {
   deserializeHead,
   predictBatch,
@@ -199,6 +201,8 @@ interface State {
   autoRetraining: boolean;
   /** True when model/head.prev.json holds a head the user can go back to. */
   hasCheckpoint: boolean;
+  /** True while a model export is being built or written. */
+  exporting: boolean;
   /** Live camera attention overlay. Session state, never written to the manifest. */
   attentionOn: boolean;
 
@@ -262,6 +266,13 @@ interface State {
   resetTraining: () => void;
   /** Restores model/head.prev.json as the live model and drops the checkpoint. */
   revertModel: () => Promise<void>;
+
+  /**
+   * Packs the current model into one zip through the native save dialog.
+   * Resolves to false when there was nothing to export or the dialog was
+   * cancelled, which is not an error.
+   */
+  exportModel: () => Promise<boolean>;
 
   setAttentionOn: (on: boolean) => void;
   /** Asking for attention adds one batched head pass over the same features. */
@@ -1263,6 +1274,7 @@ export const useStore = create<State>((set, get) => {
     modelLabelIds: [],
     autoRetraining: false,
     hasCheckpoint: false,
+    exporting: false,
     attentionOn: false,
 
     async boot() {
@@ -1936,6 +1948,61 @@ export const useStore = create<State>((set, get) => {
         await get().saveNow();
       } catch (err) {
         get().toast(errorText(err), "bad");
+      }
+    },
+
+    /**
+     * One self contained zip: the trained weights exactly as the bundle stores
+     * them, the frozen extractor they read, a README that documents the format
+     * field by field and a runnable example page.
+     *
+     * The save dialog comes first, so a cancelled export costs nothing. The
+     * weights are read back off disk rather than serialized from the live model,
+     * because what somebody else runs should be the same bytes this project
+     * carries and not a second rendering of them.
+     */
+    async exportModel() {
+      const { path, manifest, hasModel, stale } = get();
+      if (!path || !manifest) return false;
+      if (!hasModel) {
+        get().toast("Train the model first, then you can export it", "bad");
+        return false;
+      }
+      if (stale) {
+        get().toast("The pictures changed since the last run. Train again, then export", "bad");
+        return false;
+      }
+      if (get().exporting) return false;
+
+      set({ exporting: true });
+      try {
+        const target = await storage.pickExportTarget(exportFileName(manifest.name));
+        if (!target) return false;
+
+        set({ busy: { title: "Packing the model", done: 0, total: 2 } });
+        const weights =
+          manifest.mode === "detect"
+            ? await storage.readDetector(path)
+            : await storage.readModel(path);
+        if (!weights) throw new Error("The trained model file is missing. Train again first.");
+
+        const bundle = await buildExportBundle({
+          projectName: manifest.name,
+          appVersion: APP_VERSION,
+          mode: manifest.mode,
+          labels: manifest.labels,
+          weights,
+          meta: manifest.model,
+        });
+        set({ busy: { title: "Writing the export", done: 1, total: 2 } });
+        await storage.writeExport(target, bytesToBase64(bundle.bytes));
+        get().toast(`Exported to ${target}`, "good");
+        return true;
+      } catch (err) {
+        get().toast(`Export failed: ${errorText(err)}`, "bad");
+        return false;
+      } finally {
+        set({ exporting: false, busy: null });
       }
     },
 

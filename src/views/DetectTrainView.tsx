@@ -14,6 +14,7 @@ import {
   Check,
   CheckCircle,
   CircleNotch,
+  DownloadSimple,
   Lightning,
   Question,
   Sliders,
@@ -175,6 +176,8 @@ export function DetectTrainView() {
   const autoRetraining = useStore((s) => s.autoRetraining);
   const hasCheckpoint = useStore((s) => s.hasCheckpoint);
   const revertModel = useStore((s) => s.revertModel);
+  const exportModel = useStore((s) => s.exportModel);
+  const exporting = useStore((s) => s.exporting);
   const [pickedFilter, setPickedFilter] = useState<Filter | null>(null);
 
   const labels = manifest?.labels ?? [];
@@ -186,6 +189,15 @@ export function DetectTrainView() {
   const ready = boxed.length >= DETECT_MIN_IMAGES;
   const running =
     train.phase === "reading" || train.phase === "training" || train.phase === "scoring";
+
+  // Same rule as the classifier view: an export needs a detector that exists and
+  // still matches the boxes it was trained on, and the reason it cannot happen is
+  // spelled out rather than hidden in a greyed out button.
+  const exportBlocked = !hasModel
+    ? "There is no trained detector to export yet. Press Train first."
+    : stale
+      ? "The boxes changed since the last run, so the saved detector no longer matches them. Train again, then export."
+      : null;
 
   const nameFor = (id: string) => labels.find((l) => l.id === id)?.name ?? "gone";
   const colorFor = (id: string) => swatch(labels.find((l) => l.id === id)?.color ?? 0);
@@ -288,6 +300,18 @@ export function DetectTrainView() {
                 Use it
               </button>
             ) : null}
+            <button
+              className="btn"
+              disabled={Boolean(exportBlocked) || running || exporting}
+              title={
+                exportBlocked ??
+                "Save this detector as one zip that runs outside Belo, extractor and example included"
+              }
+              onClick={() => void exportModel()}
+            >
+              <DownloadSimple size={16} weight="bold" />
+              {exporting ? "Exporting..." : "Export model"}
+            </button>
             {hasCheckpoint ? (
               <button
                 className="btn"
@@ -303,6 +327,11 @@ export function DetectTrainView() {
               {backend ?? "starting"}
             </span>
           </div>
+
+          <p className="field__hint">
+            {exportBlocked ??
+              "Export model writes one zip holding the detection head, the frozen MobileNet it reads, a plain-language description of the format and a page that draws its boxes. It is a developer bundle, not an app."}
+          </p>
         </div>
 
         <dl className="train__metrics">

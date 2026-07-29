@@ -4,6 +4,7 @@ import {
   Brain,
   CheckCircle,
   CircleNotch,
+  DownloadSimple,
   Lightning,
   Question,
   Sliders,
@@ -102,6 +103,8 @@ export function TrainView() {
   const autoRetraining = useStore((s) => s.autoRetraining);
   const hasCheckpoint = useStore((s) => s.hasCheckpoint);
   const revertModel = useStore((s) => s.revertModel);
+  const exportModel = useStore((s) => s.exportModel);
+  const exporting = useStore((s) => s.exporting);
   const [pickedFilter, setPickedFilter] = useState<Filter | null>(null);
 
   const labels = manifest?.labels ?? [];
@@ -119,6 +122,15 @@ export function TrainView() {
         .filter((row) => row.label !== null),
     [train.labelStats, labels],
   );
+
+  // Exporting needs a model that exists and still describes this dataset. The
+  // reason it cannot happen is said in plain words rather than left to a greyed
+  // out button nobody can explain.
+  const exportBlocked = !hasModel
+    ? "There is no trained model to export yet. Press Train first."
+    : stale
+      ? "The pictures changed since the last run, so the saved model no longer matches them. Train again, then export."
+      : null;
 
   const wrongCount = train.verdicts.filter((v) => !v.correct).length;
   // Land on the mistakes when there are any, otherwise show the full set
@@ -214,6 +226,18 @@ export function TrainView() {
                 Use it
               </button>
             ) : null}
+            <button
+              className="btn"
+              disabled={Boolean(exportBlocked) || running || exporting}
+              title={
+                exportBlocked ??
+                "Save this model as one zip that runs outside Belo, extractor and example included"
+              }
+              onClick={() => void exportModel()}
+            >
+              <DownloadSimple size={16} weight="bold" />
+              {exporting ? "Exporting..." : "Export model"}
+            </button>
             {hasCheckpoint ? (
               <button
                 className="btn"
@@ -229,6 +253,11 @@ export function TrainView() {
               {backend ?? "starting"}
             </span>
           </div>
+
+          <p className="field__hint">
+            {exportBlocked ??
+              "Export model writes one zip holding the trained head, the frozen MobileNet it reads, a plain-language description of the format and a page that runs it. It is a developer bundle, not an app."}
+          </p>
         </div>
 
         <dl className="train__metrics">
