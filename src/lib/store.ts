@@ -23,6 +23,7 @@ import {
   type ImageRecord,
   type ImageSource,
   type Label,
+  type ModelMeta,
   type ProjectManifest,
   type ProjectMode,
   type ProjectSummary,
@@ -59,6 +60,8 @@ import {
   type Detector,
   type DetectSample,
 } from "./ml/detector";
+import { modelFilesFor, OWNED_MODEL_FILES, planModelDir } from "./hygiene";
+import { reconcileRecents, summarizeManifest } from "./summary";
 import {
   deserializeHead,
   predictBatch,
@@ -436,6 +439,123 @@ export const useStore = create<State>((set, get) => {
   const forgetCaches = () => {
     featureCache.clear();
     spatialCache.clear();
+  };
+
+  /**
+   * Erases the model files of a project whose structure just changed.
+   *
+   * A changed label set does not make the stored weights out of date, it makes
+   * them unreadable: the head has one output per label and there is no honest
+   * way to map the old outputs onto the new set. They used to be left on disk and
+   * merely ignored, which meant a bundle carried megabytes of dead JSON and a
+   * person looking at model/ could not tell live weights from stale ones. The
+   * checkpoint goes with them, for exactly the same reason.
+   */
+  const discardModelFiles = (path: string | null) => {
+    if (!path) return;
+    void (async () => {
+      try {
+        const present = await storage.listModelFiles(path);
+        const doomed = OWNED_MODEL_FILES.filter((name) => present.includes(name));
+        if (doomed.length > 0) await storage.deleteModelFiles(path, doomed);
+      } catch (err) {
+        get().toast(`Could not remove the old model files: ${errorText(err)}`, "bad");
+      }
+    })();
+  };
+
+  /**
+   * Cleans a bundle's model folder as it is opened and returns the manifest that
+   * matches what is now on disk.
+   *
+   * Files can outlive the model they belonged to: a version that did not delete
+   * them wrote them, or a project was edited by hand. The plan is pure and lives
+   * in lib/hygiene.ts; this only reads the candidates, asks it what to remove and
+   * brings the manifest back in step so the Home list cannot claim a model the
+   * bundle no longer holds. Nothing outside the four files Belo writes is ever
+   * offered for deletion, and the Rust side refuses anything else regardless.
+   */
+  const tidyModelFiles = async (
+    path: string,
+    manifest: ProjectManifest,
+  ): Promise<{ manifest: ProjectManifest; hasModelFile: boolean }> => {
+    const mine = modelFilesFor(manifest.mode);
+    let files: string[] = [];
+    try {
+      files = await storage.listModelFiles(path);
+    } catch {
+      // A bundle with no model folder yet has nothing to clean.
+      return { manifest, hasModelFile: false };
+    }
+
+    const known = new Set(manifest.labels.map((label) => label.id));
+    const compatible: Record<string, boolean> = {};
+    const readFits = async (name: string, meta: ModelMeta | null | undefined) => {
+      if (!files.includes(name) || !meta) return;
+      try {
+        const text =
+          name === mine.model
+            ? manifest.mode === "detect"
+              ? await storage.readDetector(path)
+              : await storage.readModel(path)
+            : manifest.mode === "detect"
+              ? await storage.readDetectorCheckpoint(path)
+              : await storage.readCheckpoint(path);
+        if (!text) return;
+        const stored = JSON.parse(text) as StoredHead | StoredDetector;
+        const storedMode: ProjectMode =
+          manifest.mode === "detect"
+            ? "detect"
+            : (stored as StoredHead).mode === "multi"
+              ? "multi"
+              : "single";
+        compatible[name] =
+          canRestoreModel({ ...manifest, model: meta }, storedMode, stored.labelIds) &&
+          stored.labelIds.every((id) => known.has(id));
+      } catch {
+        // Unreadable weights are as good as gone, so they are treated as unfit.
+      }
+    };
+
+    await readFits(mine.model, manifest.model);
+    await readFits(mine.checkpoint, manifest.checkpoint);
+
+    const plan = planModelDir({
+      mode: manifest.mode,
+      files,
+      hasModelMeta: Boolean(manifest.model),
+      hasCheckpointMeta: Boolean(manifest.checkpoint),
+      compatible,
+    });
+
+    if (plan.remove.length === 0) {
+      return { manifest, hasModelFile: files.includes(mine.model) };
+    }
+
+    try {
+      await storage.deleteModelFiles(path, plan.remove);
+    } catch (err) {
+      get().toast(`Could not tidy the model folder: ${errorText(err)}`, "bad");
+      return { manifest, hasModelFile: files.includes(mine.model) };
+    }
+    const left = files.filter((name) => !plan.remove.includes(name));
+
+    if (!plan.dropModelMeta && !plan.dropCheckpointMeta) {
+      return { manifest, hasModelFile: left.includes(mine.model) };
+    }
+    // The metadata is corrected in place, with updatedAt left alone: opening a
+    // project is not an edit and must not reorder the Home list.
+    const next: ProjectManifest = {
+      ...manifest,
+      ...(plan.dropModelMeta ? { model: null, modelStale: false } : {}),
+      ...(plan.dropCheckpointMeta ? { checkpoint: null } : {}),
+    };
+    try {
+      await storage.writeManifest(path, JSON.stringify(next, null, 2));
+    } catch (err) {
+      get().toast(errorText(err), "bad");
+    }
+    return { manifest: next, hasModelFile: left.includes(mine.model) };
   };
 
   const markStale = () => {
@@ -1216,7 +1336,11 @@ export const useStore = create<State>((set, get) => {
     async openProject(path) {
       try {
         const text = await storage.readManifest(path);
-        const manifest = migrateManifest(JSON.parse(text) as ProjectManifest);
+        const loaded = migrateManifest(JSON.parse(text) as ProjectManifest);
+        // Anything dead in model/ goes before the project is shown, so the state
+        // the app holds and the files on disk describe the same model.
+        const tidied = await tidyModelFiles(path, loaded);
+        const manifest = tidied.manifest;
         forgetCaches();
         dropModel();
         set({
@@ -1230,6 +1354,14 @@ export const useStore = create<State>((set, get) => {
         });
         await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
+        // The recents index and the folder scan are both older than the manifest
+        // just parsed, so the manifest wins for the project being opened.
+        set({
+          recents: reconcileRecents(
+            get().recents,
+            summarizeManifest(path, manifest, tidied.hasModelFile),
+          ),
+        });
 
         // Restore a previously trained detection head, same idea as the
         // classifier below: reopening a project gets its model back without a
@@ -1394,9 +1526,15 @@ export const useStore = create<State>((set, get) => {
         color: manifest.labels.length % SWATCH_COUNT,
         createdAt: new Date().toISOString(),
       };
-      touch({ labels: [...manifest.labels, label], model: null, modelStale: false });
-      set({ activeLabelId: label.id });
+      touch({
+        labels: [...manifest.labels, label],
+        model: null,
+        checkpoint: null,
+        modelStale: false,
+      });
+      set({ activeLabelId: label.id, hasCheckpoint: false });
       dropModel();
+      discardModelFiles(get().path);
       return label.id;
     },
 
@@ -1443,9 +1581,12 @@ export const useStore = create<State>((set, get) => {
               : img;
           }),
         model: null,
+        checkpoint: null,
         modelStale: false,
       });
       dropModel();
+      discardModelFiles(path);
+      set({ hasCheckpoint: false });
       if (get().activeLabelId === id) set({ activeLabelId: labels[0]?.id ?? null });
     },
 

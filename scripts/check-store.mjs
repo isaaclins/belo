@@ -1,7 +1,8 @@
 // Regression check for the project store: manifest staleness, serialized saves,
-// the background retrain policy, the detector checkpoint and the annotator's
-// undo stack. Uses an in-memory storage double and a /tmp handle. No project is
-// created and nothing is trained.
+// the background retrain policy, the detector checkpoint, the annotator's undo
+// stack, the model folder cleanup and the two anomalies the README records under
+// "Known past anomalies". Uses an in-memory storage double and a /tmp handle. No
+// project is created and nothing is trained.
 
 import { registerHooks } from "node:module";
 
@@ -19,7 +20,7 @@ registerHooks({
 
 const { storage } = await import(new URL("../src/lib/storage.ts", import.meta.url));
 const { APP_VERSION, useStore } = await import(new URL("../src/lib/store.ts", import.meta.url));
-const { DETECT_MIN_IMAGES, newManifest } = await import(new URL("../src/lib/types.ts", import.meta.url));
+const { DEFAULT_SETTINGS, DETECT_MIN_IMAGES, newManifest } = await import(new URL("../src/lib/types.ts", import.meta.url));
 const { autoRetrainAllowed, createRetrainScheduler, AUTO_RETRAIN_DELAY_MS } = await import(
   new URL("../src/lib/retrain.ts", import.meta.url)
 );
@@ -28,6 +29,15 @@ const { emptyUndo, recordUndo, redo, undo, UNDO_LIMIT } = await import(
 );
 const { buildDetector, serializeDetector, deserializeDetector } = await import(
   new URL("../src/lib/ml/detector.ts", import.meta.url)
+);
+const { buildHead, serializeHead } = await import(
+  new URL("../src/lib/ml/classifier.ts", import.meta.url)
+);
+const { OWNED_MODEL_FILES, planModelDir } = await import(
+  new URL("../src/lib/hygiene.ts", import.meta.url)
+);
+const { manifestContent, reconcileRecents, summarizeManifest } = await import(
+  new URL("../src/lib/summary.ts", import.meta.url)
 );
 
 // Importing the store registers the WASM backend, whose binaries are only in
@@ -448,6 +458,328 @@ check(
     restored[0].y === 0.234567891 &&
     restored[0].w === 0.345678912 &&
     restored[0].h === 0.456789123,
+);
+
+// --- the model folder cleanup, first as pure decisions ---
+
+const planFor = (over) =>
+  planModelDir({
+    mode: "single",
+    files: [],
+    hasModelMeta: true,
+    hasCheckpointMeta: true,
+    compatible: {},
+    ...over,
+  });
+
+check(
+  "a live head and checkpoint that still fit the project are kept",
+  planFor({
+    files: ["head.json", "head.prev.json"],
+    compatible: { "head.json": true, "head.prev.json": true },
+  }).remove.length === 0,
+);
+check(
+  "a head whose label set no longer fits is deleted and the manifest stops claiming it",
+  (() => {
+    const plan = planFor({ files: ["head.json"], compatible: { "head.json": false } });
+    return (
+      plan.remove.join() === "head.json" &&
+      plan.dropModelMeta === true &&
+      plan.dropCheckpointMeta === false
+    );
+  })(),
+);
+check(
+  "a head file the manifest describes no model for is an orphan and goes",
+  planFor({ files: ["head.json"], hasModelMeta: false }).remove.join() === "head.json",
+);
+check(
+  "a checkpoint file the manifest no longer describes goes, with its metadata",
+  (() => {
+    const plan = planFor({
+      files: ["head.json", "head.prev.json"],
+      hasCheckpointMeta: false,
+      compatible: { "head.json": true },
+    });
+    return plan.remove.join() === "head.prev.json" && plan.dropModelMeta === false;
+  })(),
+);
+check(
+  "detect files in a classify project are leftovers and go",
+  planFor({
+    files: ["head.json", "detect.json", "detect.prev.json"],
+    compatible: { "head.json": true },
+    hasCheckpointMeta: false,
+  }).remove.join() === "detect.json,detect.prev.json",
+);
+check(
+  "classify files in a detect project are leftovers and go",
+  planModelDir({
+    mode: "detect",
+    files: ["head.json", "head.prev.json", "detect.json"],
+    hasModelMeta: true,
+    hasCheckpointMeta: false,
+    compatible: { "detect.json": true },
+  }).remove.join() === "head.json,head.prev.json",
+);
+check(
+  "nothing Belo did not write is ever proposed for deletion",
+  planFor({
+    files: ["project.json", "mine.json", "images", "head.json"],
+    hasModelMeta: false,
+  }).remove.join() === "head.json",
+);
+check(
+  "a bundle with an empty model folder needs no cleanup",
+  planFor({ files: [], hasModelMeta: false, hasCheckpointMeta: false }).remove.length === 0,
+);
+
+// --- the same cleanup through the store, over a fake model folder ---
+
+const modelDir = new Map();
+const deleted = [];
+storage.listModelFiles = async () => [...modelDir.keys()].sort();
+storage.deleteModelFiles = async (_path, names) => {
+  for (const name of names) {
+    if (!OWNED_MODEL_FILES.includes(name)) throw new Error(`not a Belo model file: ${name}`);
+    deleted.push(name);
+    modelDir.delete(name);
+  }
+};
+storage.readModel = async () => modelDir.get("head.json") ?? null;
+storage.writeModel = async (_path, text) => void modelDir.set("head.json", text);
+storage.readCheckpoint = async () => modelDir.get("head.prev.json") ?? null;
+storage.hasCheckpoint = async () => modelDir.has("head.prev.json");
+storage.readDetector = async () => modelDir.get("detect.json") ?? null;
+storage.writeDetector = async (_path, text) => void modelDir.set("detect.json", text);
+storage.readDetectorCheckpoint = async () => modelDir.get("detect.prev.json") ?? null;
+storage.hasDetectorCheckpoint = async () => modelDir.has("detect.prev.json");
+storage.rememberProject = async () => {};
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const head = buildHead(2, DEFAULT_SETTINGS, "single");
+const headText = JSON.stringify(serializeHead(head, ["lbl_a", "lbl_b"], 100, "single"));
+head.dispose();
+
+const labelled = newManifest("Hygiene", APP_VERSION, "single");
+labelled.labels = [
+  { id: "lbl_a", name: "A", color: 0, createdAt: "2026-01-01T00:00:00.000Z" },
+  { id: "lbl_b", name: "B", color: 1, createdAt: "2026-01-01T00:00:00.000Z" },
+];
+labelled.images = [
+  { id: "img_a", file: "img_a.jpg", labelId: "lbl_a", source: "import", addedAt: "x" },
+  { id: "img_b", file: "img_b.jpg", labelId: "lbl_b", source: "import", addedAt: "x" },
+];
+const headMeta = {
+  trainedAt: "2026-01-02T00:00:00.000Z",
+  mode: "single",
+  labelIds: ["lbl_a", "lbl_b"],
+  epochs: 40,
+  accuracy: 1,
+  valAccuracy: 1,
+  imageCount: 2,
+  settings: labelled.settings,
+};
+labelled.model = headMeta;
+labelled.checkpoint = headMeta;
+
+modelDir.clear();
+deleted.length = 0;
+modelDir.set("head.json", headText);
+modelDir.set("head.prev.json", headText);
+writes.length = 0;
+useStore.setState({
+  path,
+  manifest: labelled,
+  dirty: false,
+  hasModel: true,
+  hasCheckpoint: true,
+  stale: false,
+  modelLabelIds: ["lbl_a", "lbl_b"],
+});
+useStore.getState().addLabel("C");
+await settle();
+check(
+  "adding a label deletes the invalidated head and its checkpoint from the bundle",
+  modelDir.size === 0 && deleted.length === 2,
+  `deleted ${deleted.join(", ") || "nothing"}`,
+);
+check(
+  "adding a label also drops the checkpoint metadata and the revert action",
+  useStore.getState().manifest.model === null &&
+    useStore.getState().manifest.checkpoint === null &&
+    useStore.getState().hasCheckpoint === false &&
+    useStore.getState().hasModel === false,
+);
+
+// Opening a project cleans what an older version left behind. The stored
+// detector answers with two labels while the manifest describes one, so it is
+// unreadable rather than merely out of date, and the head files belong to a kind
+// of project this one is not.
+const stray = newManifest("Stray files", APP_VERSION, "detect");
+stray.labels = [{ id: "lbl_a", name: "A", color: 0, createdAt: "2026-01-01T00:00:00.000Z" }];
+stray.images = Array.from({ length: 44 }, (_, i) => ({
+  id: `img_${i}`,
+  file: `img_${i}.jpg`,
+  labelId: null,
+  boxes: [{ id: `box_${i}`, labelId: "lbl_a", x: 0.1, y: 0.1, w: 0.2, h: 0.2 }],
+  source: "import",
+  addedAt: "2026-01-01T00:00:00.000Z",
+}));
+stray.model = { ...headMeta, mode: "detect", labelIds: ["lbl_a"] };
+stray.checkpoint = null;
+stray.updatedAt = "2026-02-01T00:00:00.000Z";
+
+const twoLabelDetector = buildDetector(["lbl_a", "lbl_b"], 16);
+const twoLabelText = JSON.stringify(serializeDetector(twoLabelDetector));
+twoLabelDetector.model.dispose();
+
+modelDir.clear();
+deleted.length = 0;
+modelDir.set("detect.json", twoLabelText);
+modelDir.set("head.json", headText);
+modelDir.set("head.prev.json", headText);
+modelDir.set("mine.json", "a file Belo did not write");
+writes.length = 0;
+storage.readManifest = async () => JSON.stringify(stray);
+// A stale recents index: the number the Home list would show if nobody checked.
+storage.recentProjects = async () => [
+  {
+    path,
+    name: "Stray files",
+    labelCount: 0,
+    imageCount: 45,
+    trained: true,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    missing: false,
+  },
+];
+await useStore.getState().openProject(path);
+check(
+  "opening a project deletes the incompatible detector and the foreign head files",
+  deleted.sort().join(",") === "detect.json,head.json,head.prev.json",
+  `deleted ${deleted.join(", ") || "nothing"}`,
+);
+check(
+  "the cleanup leaves a file Belo does not own alone",
+  modelDir.size === 1 && modelDir.get("mine.json") === "a file Belo did not write",
+  [...modelDir.keys()].join(", "),
+);
+check(
+  "the manifest stops claiming a model whose weights were removed",
+  useStore.getState().manifest.model === null &&
+    useStore.getState().manifest.modelStale === false &&
+    useStore.getState().hasModel === false,
+);
+check(
+  "the cleanup keeps updatedAt, so opening a project does not reorder the Home list",
+  writes.at(-1)?.updatedAt === "2026-02-01T00:00:00.000Z",
+  writes.at(-1)?.updatedAt,
+);
+
+// --- the two anomalies the README records, pinned as checks ---
+//
+// Both were seen once and are no longer reproducible: a real project that read
+// "0 labels, 0 images, trained" in the Home list, and a recents entry that
+// counted 45 images where the manifest held 44. The root cause was never found,
+// so what is left is to make the two claims impossible to break quietly.
+
+const content = manifestContent(stray);
+const scanned = summarizeManifest(path, stray, false);
+check(
+  "a summary of a manifest with content can never report zero labels or images",
+  content.labels === 1 &&
+    content.images === 44 &&
+    content.boxes === 44 &&
+    scanned.labelCount === content.labels &&
+    scanned.imageCount === content.images &&
+    scanned.labelCount > 0 &&
+    scanned.imageCount > 0,
+  JSON.stringify({ content, summary: scanned }),
+);
+check(
+  "a summary reports trained only when the manifest and the weights agree",
+  summarizeManifest(path, { ...stray, model: null }, true).trained === false &&
+    summarizeManifest(path, stray, true).trained === true &&
+    scanned.trained === false,
+);
+check(
+  "a recents entry disagreeing with the manifest resolves to the manifest",
+  (() => {
+    const stale = {
+      path,
+      name: "Stray files",
+      labelCount: 0,
+      imageCount: 45,
+      trained: true,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      missing: false,
+    };
+    const other = { ...stale, path: "/tmp/zz-other.belo" };
+    const merged = reconcileRecents([other, stale], scanned);
+    return (
+      merged.length === 2 &&
+      merged[1].imageCount === 44 &&
+      merged[1].labelCount === 1 &&
+      merged[1].trained === false &&
+      merged[0] === other &&
+      reconcileRecents([other], scanned)[0].imageCount === 44
+    );
+  })(),
+);
+check(
+  "opening the project puts the manifest's own numbers in the Home list",
+  (() => {
+    const entry = useStore.getState().recents.find((row) => row.path === path);
+    return entry?.imageCount === 44 && entry?.labelCount === 1 && entry?.trained === false;
+  })(),
+  JSON.stringify(useStore.getState().recents.find((row) => row.path === path)),
+);
+
+// --- the stored formats the export documents, pinned tensor by tensor ---
+//
+// The zip README tells a reader which weight sits at which index, and
+// scripts/check-export.mjs proves an independent implementation using that
+// order agrees with Belo. These pin the order itself, so a refactor that
+// reorders the layers fails here rather than in somebody's export.
+
+const shapesOf = (stored) => stored.weights.map((w) => w.shape.join("x")).join(" ");
+const singleHead = buildHead(2, labelled.settings, "single");
+const multiHead = buildHead(2, labelled.settings, "multi");
+const singleStored = serializeHead(singleHead, ["lbl_a", "lbl_b"], 100, "single");
+const multiStored = serializeHead(multiHead, ["lbl_a", "lbl_b"], 100, "multi");
+singleHead.dispose();
+multiHead.dispose();
+check(
+  "a single label head stores three tensors: hidden kernel, hidden bias, output kernel",
+  shapesOf(singleStored) === "1024x100 100 100x2",
+  shapesOf(singleStored),
+);
+check(
+  "a multi label head stores the same three plus an output bias",
+  shapesOf(multiStored) === "1024x100 100 100x2 2",
+  shapesOf(multiStored),
+);
+
+const twoMap = buildDetector(["lbl_a", "lbl_b"], 96);
+const twoMapStored = serializeDetector(twoMap);
+twoMap.model.dispose();
+check(
+  "a detector stores its weights grouped by kind and then by map, coarse first",
+  shapesOf(twoMapStored) ===
+    "1024x96 96 512x96 96 96x24 24 96x24 24 96x18 18 96x18 18",
+  shapesOf(twoMapStored),
+);
+check(
+  "the stored maps carry the depths and anchors the export documents",
+  twoMapStored.featureScales.length === 2 &&
+    twoMapStored.featureScales[0].depth === 1024 &&
+    twoMapStored.featureScales[0].rows === 7 &&
+    twoMapStored.featureScales[1].depth === 512 &&
+    twoMapStored.featureScales[1].rows === 14 &&
+    twoMapStored.headWidth === 96,
 );
 
 console.log(results.join("\n"));
