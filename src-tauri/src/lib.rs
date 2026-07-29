@@ -461,10 +461,16 @@ mod tests {
 
     #[test]
     fn summary_ignores_an_orphan_detector_file() {
+        // The suffix has to stay filename safe on every platform, so it is the
+        // process id plus the clock rather than the thread name, which on this
+        // test is the module path and carries colons Windows will not accept.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         let root = std::env::temp_dir().join(format!(
-            "zz-belo-summary-{}-{}.belo",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            "zz-belo-summary-{}-{unique}.belo",
+            std::process::id()
         ));
         let model_dir = root.join(MODEL_DIR);
         fs::create_dir_all(&model_dir).unwrap();

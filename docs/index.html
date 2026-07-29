@@ -12,13 +12,19 @@
 <meta property="og:type" content="website" />
 <meta property="og:title" content="Belo, teach your computer to recognize things" />
 <meta property="og:description" content="Name your things, add pictures, press Train. Belo then tells you what the camera sees. Everything runs on your device." />
-<meta property="og:url" content="https://isaaclins.github.io/belo/" />
-<meta property="og:image" content="https://isaaclins.github.io/belo/mark.svg" />
-<meta name="twitter:card" content="summary" />
+<meta property="og:url" content="https://isaaclins.com/belo/" />
+<link rel="canonical" href="https://isaaclins.com/belo/" />
+<meta property="og:image" content="https://isaaclins.com/belo/og.png" />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="The Belo mark next to the word Belo and the line teach your machine to see." />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://isaaclins.com/belo/og.png" />
 <!-- The custom domain sits behind a CDN that holds static assets for four
      hours, so the stylesheet and the script carry a version query. Bump it
      whenever either file changes. -->
-<link rel="stylesheet" href="styles.css?v=4" />
+<link rel="stylesheet" href="styles.css?v=5" />
 </head>
 <body>
 
@@ -473,13 +479,44 @@
   <section class="get" id="get">
     <div class="get__head">
       <p class="chip">Get it</p>
-      <h2>Two ways in.<br />Both honest.</h2>
+      <h2>Download Belo.<br />Free and open.</h2>
+      <p class="lead lead--tight">Pick your machine. Every installer is built by GitHub Actions from the tagged source, and each new version keeps the same links.</p>
     </div>
+
+    <!-- The links point at releases/latest/download, so they follow the newest
+         release without an edit here. The file names carry no version number,
+         which is what makes that work; see .github/workflows/release.yml. -->
+    <div class="dl-grid">
+      <article class="dl">
+        <h3>macOS</h3>
+        <p class="dl__meta">Apple Silicon, macOS 10.15 or newer</p>
+        <a class="btn btn--primary" href="https://github.com/isaaclins/belo/releases/latest/download/Belo-macos-aarch64.dmg">Download the .dmg</a>
+        <p class="fineprint">The build is not signed by Apple yet. The first time, right click Belo in Applications and choose Open, then confirm. A double click alone will be blocked.</p>
+      </article>
+
+      <article class="dl">
+        <h3>Windows</h3>
+        <p class="dl__meta">64 bit, Windows 10 or newer</p>
+        <a class="btn btn--primary" href="https://github.com/isaaclins/belo/releases/latest/download/Belo-windows-x86_64_setup.exe">Download the installer</a>
+        <p class="dl__alt">Prefer an msi? <a href="https://github.com/isaaclins/belo/releases/latest/download/Belo-windows-x86_64.msi">Belo-windows-x86_64.msi</a></p>
+        <p class="fineprint">The build is not signed yet, so SmartScreen may warn you. Choose More info, then Run anyway.</p>
+      </article>
+
+      <article class="dl">
+        <h3>Linux</h3>
+        <p class="dl__meta">x86_64, needs WebKitGTK 4.1</p>
+        <a class="btn btn--primary" href="https://github.com/isaaclins/belo/releases/latest/download/Belo-linux-x86_64.AppImage">Download the AppImage</a>
+        <p class="dl__alt">On Debian or Ubuntu: <a href="https://github.com/isaaclins/belo/releases/latest/download/Belo-linux-x86_64.deb">Belo-linux-x86_64.deb</a></p>
+        <p class="fineprint">Mark the AppImage executable before the first run. The camera depends on your system, and Linux is the least tested.</p>
+      </article>
+    </div>
+
+    <p class="dl__all"><a href="https://github.com/isaaclins/belo/releases/latest">See every file in the latest release</a></p>
 
     <div class="get__grid">
       <article class="card card--build">
-        <h3>Desktop, built from source</h3>
-        <p>No installers yet. You clone the repo and build it yourself. Needs Node 20, Rust 1.77 and Tauri 2.</p>
+        <h3>Or build it from source</h3>
+        <p>The installers come from this same source. If you would rather build it yourself, you need Node 20, Rust 1.77 and the Tauri 2 system packages.</p>
         <div class="code">
           <pre><code id="clone-cmd">git clone https://github.com/isaaclins/belo.git
 cd belo
@@ -492,7 +529,7 @@ npm run tauri build</code></pre>
           <li>Windows</li>
           <li>Linux</li>
         </ul>
-        <p class="fineprint">On Linux the camera depends on your system, and it is the least tested.</p>
+        <p class="fineprint">A source build is unsigned too, and it is the only way to get an Intel Mac build today.</p>
         <a class="btn btn--primary" href="https://github.com/isaaclins/belo">Open the repo on GitHub</a>
       </article>
 

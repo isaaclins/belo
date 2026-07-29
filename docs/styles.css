@@ -672,8 +672,61 @@ img, svg { display: block; max-width: 100%; }
 }
 
 /* The headline is short now, so the block is wide enough to hold two lines. */
-.get__head { margin-bottom: clamp(32px, 4vw, 52px); max-width: 34ch; }
+.get__head { margin-bottom: clamp(32px, 4vw, 52px); max-width: 46ch; }
 .get__head h2 { max-width: 34ch; }
+.lead--tight { margin: 18px 0 0; max-width: 52ch; }
+
+/* ---------------- downloads ---------------- */
+
+.dl-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.dl {
+  background: var(--panel);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* The first card is the one most people need, so it wears the accent. */
+.dl:first-child { background: var(--accent); }
+
+.dl h3 { margin: 0; }
+
+.dl__meta {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+/* The download button carries the card, so it sits above the small print and
+   stretches to the full card width on every screen. */
+.dl .btn { width: 100%; margin-top: auto; }
+.dl:first-child .btn { background: var(--panel); }
+
+.dl__alt {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.dl__alt a { word-break: break-all; }
+
+.dl__all {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  margin: 0 0 clamp(40px, 5vw, 64px);
+}
 
 .get__grid {
   display: grid;
@@ -878,6 +931,7 @@ img, svg { display: block; max-width: 100%; }
   .bento { grid-template-columns: minmax(0, 1fr); }
   .projects { grid-template-columns: minmax(0, 1fr); }
   .get__grid { grid-template-columns: minmax(0, 1fr); }
+  .dl-grid { grid-template-columns: minmax(0, 1fr); }
   .section__head { grid-template-columns: minmax(0, 1fr); align-items: start; }
   .model__grid { grid-template-columns: minmax(0, 1fr); }
   .footer { grid-template-columns: minmax(0, 1fr); }
@@ -914,7 +968,7 @@ img, svg { display: block; max-width: 100%; }
   /* The clone line is the longest one, so the copy button drops to the short
      last line instead of sitting on top of the repository URL. */
   .copy { top: auto; bottom: 12px; right: 12px; }
-  .tile, .card, .model__item { padding: 20px; }
+  .tile, .card, .model__item, .dl { padding: 20px; }
   .get__head { max-width: none; }
   .footer__links { flex-wrap: wrap; }
 }

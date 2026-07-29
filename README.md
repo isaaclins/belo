@@ -53,10 +53,28 @@ detect projects show their detector's actual boxes instead.
 
 ## Get Belo
 
+Desktop installers are built by GitHub Actions from the tagged source and attached to
+every release. These links always point at the newest release:
+
+| Platform | Download |
+| --- | --- |
+| macOS, Apple Silicon | [Belo-macos-aarch64.dmg](https://github.com/isaaclins/belo/releases/latest/download/Belo-macos-aarch64.dmg) |
+| Windows, 64 bit | [Belo-windows-x86_64_setup.exe](https://github.com/isaaclins/belo/releases/latest/download/Belo-windows-x86_64_setup.exe) or [the .msi](https://github.com/isaaclins/belo/releases/latest/download/Belo-windows-x86_64.msi) |
+| Linux, x86_64 | [Belo-linux-x86_64.AppImage](https://github.com/isaaclins/belo/releases/latest/download/Belo-linux-x86_64.AppImage) or [the .deb](https://github.com/isaaclins/belo/releases/latest/download/Belo-linux-x86_64.deb) |
+
+The builds are not signed yet, because that needs paid developer accounts.
+
+- **macOS.** Gatekeeper blocks a double click on an unsigned app. The first time, right
+  click Belo in Applications, choose Open, and confirm. After that it opens normally.
+- **Windows.** SmartScreen may warn about an unknown publisher. Choose More info, then
+  Run anyway.
+- **Linux.** Mark the AppImage executable with `chmod +x` before the first run. The
+  AppImage and the deb both need WebKitGTK 4.1.
+
+On an Intel Mac, or on any other architecture, [build Belo from source](#development).
+
 **App Store: coming soon.** Apple developer license approval is currently in progress,
 so there is no App Store listing yet.
-
-Until then, a technical friend can [build Belo from source](#development).
 
 ## Honest limitations
 
@@ -338,13 +356,15 @@ Requirements: Node 20 or newer, Rust 1.77 or newer, and the
 ```bash
 npm install
 npm run tauri dev     # run the app against the Vite dev server
+npm test              # typecheck plus every check script below, in CI's order
 npm run build         # typecheck plus production frontend build
 npm run typecheck     # tsc --noEmit only
 npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
 ```
 
-Detection release verification:
+Detection release verification. `npm test` runs all five in this order and prints how long
+each one took, which is exactly what CI does:
 
 ```bash
 npm run check:boxes       # manifest v3 and one-finger box geometry
@@ -353,6 +373,23 @@ npm run check:store       # stale-model persistence and serialized manifest save
 npm run check:camera      # live camera switching seam
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
+
+### Continuous integration
+
+Two workflows live in `.github/workflows`:
+
+- **test.yml** runs on every push and pull request to `main`. One job runs `npm test` and
+  the production frontend build on Ubuntu. A second job runs `cargo check --all-targets`
+  and `cargo test` on Ubuntu, macOS and Windows, so a platform specific compile error
+  shows up before a release tag, not during one.
+- **release.yml** runs on a `v*` tag and on manual dispatch. It builds the macOS dmg, the
+  Linux AppImage and deb and the Windows msi and nsis installers on their own runners,
+  and on a tag it creates the GitHub Release and uploads them. Asset names carry no
+  version number, which is what lets the download links above stay the same forever.
+
+To cut a release: make sure `main` is green, then `git tag v0.6.0 && git push origin
+v0.6.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+`src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
 
@@ -438,12 +475,20 @@ The same geometry is written three times and the three must be kept in step:
 - `src/components/BeloMark.tsx`, the in-app component, which can swap its frame to paper
   so the mark still reads on the ink top bar.
 - `scripts/make-icon.mjs`, which rasterizes the frameless variant for the icon pipeline.
+- `docs/index.html`, which inlines the framed mark as an SVG symbol for the landing page.
+- `scripts/make-og.mjs`, which draws the framed mark plus a hand authored wordmark into
+  the social preview card.
 
 `npm run icons` runs the whole pipeline: it draws `src-tauri/app-icon.png` at 1024, hands
 that to `tauri icon` for the desktop and Windows sets, then redraws the iOS
 `AppIcon.appiconset` images itself. That last step matters because `tauri icon` writes iOS
 PNGs with an alpha channel and Apple rejects app icons that have one, so those images are
 drawn at their exact final size as PNG color type 2, with no alpha and no resampling.
+
+`npm run og` redraws `docs/og.png`, the 1200x630 card that link previews show. It is the
+same flat shape sampler as the icon script, with the letters built from thick strokes and
+arcs rather than a font, so the repo needs neither an image editor nor a woff2 rasterizer
+to rebuild it.
 
 ## Mobile
 

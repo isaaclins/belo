@@ -32,14 +32,20 @@ jobs:
             label: macOS (Apple Silicon)
             target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin --bundles dmg
+            # No version in the asset names on purpose, so the landing page can
+            # link releases/latest/download/<name> once and every later release
+            # inherits the same links.
+            assetName: Belo-macos-aarch64[ext]
           - os: ubuntu-22.04
             label: Linux (x86_64)
             target: x86_64-unknown-linux-gnu
             args: --target x86_64-unknown-linux-gnu --bundles deb,appimage
+            assetName: Belo-linux-x86_64[ext]
           - os: windows-latest
             label: Windows (x86_64)
             target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc --bundles msi,nsis
+            assetName: Belo-windows-x86_64[_setup][ext]
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +102,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false
+          releaseAssetNamePattern: ${{ matrix.assetName }}
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: belo-${{ matrix.target }}-[bundle]
           args: ${{ matrix.args }}
