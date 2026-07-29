@@ -71,6 +71,11 @@ export function AttentionOverlay({
     const gridCtx = grid.getContext("2d");
     if (!gridCtx) return;
 
+    // Two passes, because a multi label frame draws several maps onto one
+    // canvas: every tint covers the whole square, so a box drawn between two
+    // tints would be washed out by the next one. Tints first, boxes on top.
+    const boxes: { color: string; name: string; box: ReturnType<typeof boxPixels> }[] = [];
+
     for (const entry of map.maps) {
       const label = labels.find((l) => l.id === entry.labelId);
       const color = swatchHex(label?.color ?? 0);
@@ -95,8 +100,14 @@ export function AttentionOverlay({
 
       const cells = hotBox(entry.values, map.rows, map.cols);
       if (!cells) continue;
-      const box = boxPixels(rect, map.rows, map.cols, cells);
+      boxes.push({
+        color,
+        name: (label?.name ?? "?").toUpperCase(),
+        box: boxPixels(rect, map.rows, map.cols, cells),
+      });
+    }
 
+    for (const { color, name, box } of boxes) {
       ctx.lineJoin = "miter";
       ctx.strokeStyle = INK_HEX;
       ctx.lineWidth = 6;
@@ -105,7 +116,6 @@ export function AttentionOverlay({
       ctx.lineWidth = 3;
       ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-      const name = (label?.name ?? "?").toUpperCase();
       ctx.font = '700 11px "Archivo Black", "Helvetica Neue", sans-serif';
       ctx.textBaseline = "middle";
       const tagW = Math.ceil(ctx.measureText(name).width) + 12;
