@@ -174,6 +174,12 @@ export interface TrainSettings {
   learningRate: number;
   hiddenUnits: number;
   validationSplit: number;
+  /**
+   * Detect projects only: show the head a mirrored, slightly relit copy of every
+   * training picture as well as the original. Costs one more feature map per
+   * picture in memory and one more extractor pass per picture per run.
+   */
+  augment: boolean;
 }
 
 export interface ModelMeta {
@@ -269,6 +275,9 @@ export const DEFAULT_SETTINGS: TrainSettings = {
   learningRate: 0.001,
   hiddenUnits: 100,
   validationSplit: 0.15,
+  // Classification trains on pooled embeddings and has no augmentation path of
+  // its own yet, so the flag is off and inert in single and multi projects.
+  augment: false,
 };
 
 /**
@@ -284,6 +293,7 @@ export const DETECT_SETTINGS: TrainSettings = {
   learningRate: 0.002,
   hiddenUnits: 96,
   validationSplit: 0.2,
+  augment: true,
 };
 
 export function defaultSettings(mode: ProjectMode): TrainSettings {

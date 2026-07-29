@@ -37,6 +37,7 @@ import {
   type Drawable,
 } from "./images";
 import { initBackend } from "./ml/backend";
+import { augmentFor, flipBoxes, VARIANTS } from "./augment";
 import { embedToArray, embedWithSpatial, loadFeatureModel } from "./ml/features";
 import type { Attention, AttentionMap } from "./attention";
 import { iou, matchDetections, type Detection, type LabeledRect } from "./detect";
@@ -60,7 +61,7 @@ import {
   type TrainProgress,
 } from "./ml/classifier";
 
-export const APP_VERSION = "0.5.0";
+export const APP_VERSION = "0.6.0";
 
 export type View = "label" | "train" | "use";
 
@@ -135,6 +136,12 @@ export interface DetectTrainState {
   scored: "holdout" | "training";
   trainedOn: number;
   heldOut: number;
+  /** Mirrored, relit copies the run added on top of trainedOn. */
+  augmented: number;
+  /** Epoch the run kept, 1 based, or null when it simply kept the last one. */
+  bestEpoch: number | null;
+  /** True when patience ran out before the configured epochs did. */
+  stoppedEarly: boolean;
 }
 
 export interface TrainState {
@@ -257,6 +264,19 @@ const featureCache = new Map<string, Float32Array>();
  * and it is dropped whenever the project is.
  */
 const spatialCache = new Map<string, Float32Array>();
+
+/**
+ * Forgets every cached feature map of one picture, the augmented variants of it
+ * included. A deleted picture that left its mirrored copy behind would hold
+ * 196 KB for the rest of the session and never be asked for again.
+ */
+function dropCaches(imageId: string): void {
+  featureCache.delete(imageId);
+  spatialCache.delete(imageId);
+  for (let variant = 1; variant <= VARIANTS; variant += 1) {
+    spatialCache.delete(`${imageId}#${variant}`);
+  }
+}
 let head: tfTypes.Sequential | null = null;
 let detector: Detector | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -426,21 +446,29 @@ export const useStore = create<State>((set, get) => {
     return feature;
   };
 
-  /** Loads and caches the 49 by 1024 grid features for one stored image. */
-  const spatialFor = async (record: ImageRecord): Promise<Float32Array> => {
-    const cached = spatialCache.get(record.id);
+  /**
+   * Loads and caches the 49 by 1024 grid features for one stored image.
+   *
+   * Variant 0 is the picture as it was stored. Anything above that is an
+   * augmented copy, mirrored and slightly relit, and gets its own cache entry
+   * because it is a different set of features over the same file.
+   */
+  const spatialFor = async (record: ImageRecord, variant = 0): Promise<Float32Array> => {
+    const key = variant === 0 ? record.id : `${record.id}#${variant}`;
+    const cached = spatialCache.get(key);
     if (cached) return cached;
     const path = get().path;
     if (!path) throw new Error("No project is open");
     const img = await loadImageElement(storage.imageUrl(path, record.file));
-    const { pooled, spatial } = await embedWithSpatial(img, true);
+    const { pooled, spatial } = await embedWithSpatial(img, true, augmentFor(record.id, variant));
     if (!spatial) throw new Error("The feature extractor returned no grid");
     try {
       const cells = (await spatial.cells.data()) as Float32Array;
-      spatialCache.set(record.id, cells);
+      spatialCache.set(key, cells);
       // The same pass already produced the pooled embedding, so the classifier
-      // cache gets it for free.
-      if (!featureCache.has(record.id)) featureCache.set(record.id, pooled);
+      // cache gets it for free. Only from the untouched picture: the classifier
+      // has no idea its embedding was mirrored.
+      if (variant === 0 && !featureCache.has(record.id)) featureCache.set(record.id, pooled);
       return cells;
     } finally {
       spatial.cells.dispose();
@@ -491,28 +519,42 @@ export const useStore = create<State>((set, get) => {
     };
   };
 
+  /**
+   * Reads a set of pictures into training samples, optionally adding augmented
+   * copies of each. The copies are built here, once per run, rather than per
+   * epoch: the expensive half of an augmented example is the extractor pass,
+   * and running it 150 times per picture instead of once would turn a half
+   * minute run into an afternoon.
+   */
   const readSamples = async (
     records: ImageRecord[],
     run: TrainRun,
     onDone: (count: number) => void,
     from: number,
+    variants = 0,
   ): Promise<DetectSample[]> => {
     const samples: DetectSample[] = [];
+    let done = 0;
     for (let i = 0; i < records.length; i += 1) {
-      if (run.stop) throw new Error("Training cancelled");
       const record = records[i];
-      samples.push({
-        imageId: record.id,
-        features: await spatialFor(record),
-        boxes: boxesOf(record).map((box) => ({
-          labelId: box.labelId,
-          x: box.x,
-          y: box.y,
-          w: box.w,
-          h: box.h,
-        })),
-      });
-      onDone(from + i + 1);
+      const boxes = boxesOf(record).map((box) => ({
+        labelId: box.labelId,
+        x: box.x,
+        y: box.y,
+        w: box.w,
+        h: box.h,
+      }));
+      for (let variant = 0; variant <= variants; variant += 1) {
+        if (run.stop) throw new Error("Training cancelled");
+        const aug = augmentFor(record.id, variant);
+        samples.push({
+          imageId: variant === 0 ? record.id : `${record.id}#${variant}`,
+          features: await spatialFor(record, variant),
+          boxes: aug.flip ? flipBoxes(boxes) : boxes,
+        });
+        done += 1;
+        onDone(from + done);
+      }
     }
     return samples;
   };
@@ -577,7 +619,10 @@ export const useStore = create<State>((set, get) => {
       return;
     }
 
-    const total = training.length + holdout.length;
+    // Augmented copies are training pictures too, and the reading bar counts
+    // extractor passes, so they belong in the total.
+    const variants = manifest.settings.augment ? VARIANTS : 0;
+    const total = training.length * (1 + variants) + holdout.length;
     set({
       train: {
         ...idleTrainState,
@@ -595,8 +640,10 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({ train: { ...s.train, message: "Reading pictures" } }));
 
       const mark = (done: number) => set((s) => ({ train: { ...s.train, done } }));
-      const samples = await readSamples(training, run, mark, 0);
-      const validation = await readSamples(holdout, run, mark, training.length);
+      const samples = await readSamples(training, run, mark, 0, variants);
+      // The holdout is never augmented. It stands in for pictures the person
+      // will actually point the camera at, and those are not mirrored.
+      const validation = await readSamples(holdout, run, mark, samples.length, 0);
 
       set((s) => ({
         train: { ...s.train, phase: "training", message: "Training the detector", done: 0 },
@@ -620,8 +667,11 @@ export const useStore = create<State>((set, get) => {
                 verdicts: [],
                 meanIoU: 0,
                 scored: validation.length > 0 ? "holdout" : "training",
-                trainedOn: samples.length,
+                trainedOn: training.length,
                 heldOut: validation.length,
+                augmented: samples.length - training.length,
+                bestEpoch: null,
+                stoppedEarly: false,
               },
             },
           }));
@@ -635,7 +685,10 @@ export const useStore = create<State>((set, get) => {
       }
 
       set((s) => ({ train: { ...s.train, phase: "scoring", message: "Checking each picture" } }));
-      const scoredSet = validation.length > 0 ? validation : samples;
+      // Never score on an augmented copy: it has no file on disk to draw the
+      // result over, and a mirrored picture is not one the person owns.
+      const scoredSet =
+        validation.length > 0 ? validation : samples.filter((sample) => !sample.imageId.includes("#"));
       const scored = scoreDetections(scoredSet, labelIds, trained);
 
       await storage.writeDetector(path, JSON.stringify(serializeDetector(trained)));
@@ -659,10 +712,10 @@ export const useStore = create<State>((set, get) => {
           trainedAt: new Date().toISOString(),
           mode: "detect",
           labelIds,
-          epochs: result.history.length,
+          epochs: result.bestEpoch ?? result.history.length,
           accuracy: recall,
           valAccuracy: null,
-          imageCount: samples.length,
+          imageCount: training.length,
           settings: manifest.settings,
           precision,
           recall,
@@ -686,8 +739,11 @@ export const useStore = create<State>((set, get) => {
             verdicts: scored.verdicts,
             meanIoU: scored.meanIoU,
             scored: validation.length > 0 ? "holdout" : "training",
-            trainedOn: samples.length,
+            trainedOn: training.length,
             heldOut: validation.length,
+            augmented: samples.length - training.length,
+            bestEpoch: result.bestEpoch,
+            stoppedEarly: result.stoppedEarly,
           },
         },
       }));
@@ -1246,10 +1302,7 @@ export const useStore = create<State>((set, get) => {
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
-      doomed.forEach((img) => {
-        featureCache.delete(img.id);
-        spatialCache.delete(img.id);
-      });
+      doomed.forEach((img) => dropCaches(img.id));
       const gone = new Set(doomed.map((img) => img.id));
       const labels = manifest.labels.filter((l) => l.id !== id);
       touch({
@@ -1526,10 +1579,7 @@ export const useStore = create<State>((set, get) => {
       } catch (err) {
         get().toast(errorText(err), "bad");
       }
-      doomed.forEach((img) => {
-        featureCache.delete(img.id);
-        spatialCache.delete(img.id);
-      });
+      doomed.forEach((img) => dropCaches(img.id));
       touch({
         images: manifest.images.filter((img) => !imageIds.includes(img.id)),
       });
