@@ -51,6 +51,9 @@ detect projects show their detector's actual boxes instead.
   which parts of the picture influenced each classification answer.
 - **Give one picture several labels.** For example, the same picture can be both
   "outdoors" and "dog".
+- **Gather practice pictures quickly.** [imgscout](https://github.com/isaaclins/imgscout)
+  is a separate command line tool that downloads pictures for a search term and lets you
+  cull them in your browser, which gives you a folder of test images to add to a project.
 - **Keep projects you can back up.** On desktop, each `.belo` project is a normal folder
   containing its pictures and saved learning. You can copy or back it up like any other
   folder.
