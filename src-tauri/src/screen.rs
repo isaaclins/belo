@@ -125,6 +125,7 @@ mod mac {
     use block2::RcBlock;
     use dispatch2::DispatchQueue;
     use objc2::rc::Retained;
+    use objc2::runtime::AnyClass;
     use objc2::runtime::{NSObject, ProtocolObject};
     use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
     use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
@@ -224,7 +225,17 @@ mod mac {
         jpeg
     }
 
+    /// Belo runs on macOS 10.15 and up, ScreenCaptureKit arrived in 12.3, and a
+    /// message to a class that is not there is a crash rather than an error. So
+    /// the class is looked up before anything else is offered or attempted.
+    pub fn available() -> bool {
+        AnyClass::get(c"SCStream").is_some() && AnyClass::get(c"SCShareableContent").is_some()
+    }
+
     pub fn permission() -> &'static str {
+        if !available() {
+            return "unsupported";
+        }
         // preflight never prompts, so a view can render the right panel without
         // provoking a system dialog nobody asked for.
         if CGPreflightScreenCaptureAccess() {
@@ -264,6 +275,9 @@ mod mac {
     }
 
     pub fn displays() -> Result<Vec<DisplayInfo>, String> {
+        if !available() {
+            return Err("This macOS is older than the screen capture it would need".into());
+        }
         if !CGPreflightScreenCaptureAccess() {
             return Err("denied".into());
         }
@@ -285,6 +299,9 @@ mod mac {
         fps: u32,
         on_frame: Channel<InvokeResponseBody>,
     ) -> Result<FeedInfo, String> {
+        if !available() {
+            return Err("This macOS is older than the screen capture it would need".into());
+        }
         if !CGPreflightScreenCaptureAccess() {
             return Err("denied".into());
         }
@@ -403,9 +420,19 @@ mod mac {
     }
 }
 
+/// Whether this build on this machine can capture a screen at all. The webview
+/// path on Windows and Linux answers for itself in the frontend; this is the
+/// native one.
 #[tauri::command]
 pub fn screen_supported() -> bool {
-    cfg!(target_os = "macos")
+    #[cfg(target_os = "macos")]
+    {
+        mac::available()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 #[tauri::command]

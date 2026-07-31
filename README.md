@@ -1213,6 +1213,11 @@ stream, would both need a video element fed by something WKWebView cannot be giv
 Rust, and neither is worth its complexity for a stage that is squared to 224 pixels before
 anything looks at it.
 
+ScreenCaptureKit arrived in macOS 12.3 and Belo's declared minimum is 10.15, so the
+classes are looked up before anything is offered: an Objective C message to a class that
+is not there is a crash, not an error. The Screen button therefore waits for the platform's
+own answer and simply never appears on an older Mac.
+
 Display enumeration is `SCShareableContent`, listed after the permission is granted, and
 the picker shows each display with its resolution. Window and application capture are not
 offered: ScreenCaptureKit can do both, but picking a window means either a system picker

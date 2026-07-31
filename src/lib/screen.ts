@@ -32,7 +32,13 @@ export interface ScreenInfo {
 export type ScreenPermission = "granted" | "denied" | "unsupported";
 
 export interface ScreenSource {
+  /** Cheap and synchronous: whether this build has any screen path at all. */
   isSupported(): boolean;
+  /**
+   * The platform's own answer, which the native path can only give from Rust:
+   * ScreenCaptureKit arrived in macOS 12.3 and Belo runs on older ones.
+   */
+  supported(): Promise<boolean>;
   /** Whether the platform can say which displays exist before capturing one. */
   canList(): boolean;
   list(): Promise<ScreenInfo[]>;
@@ -64,6 +70,7 @@ function denied(message: string): Error {
  */
 export interface ScreenPipe {
   isSupported(): boolean;
+  supported(): Promise<boolean>;
   list(): Promise<ScreenInfo[]>;
   permission(): Promise<ScreenPermission>;
   openSettings(): Promise<void>;
@@ -85,6 +92,7 @@ const pipedFeeds = new WeakMap<MediaStream, { id: string; close: () => void }>()
 export function createPipedScreenSource(pipe: ScreenPipe): ScreenSource {
   return {
     isSupported: () => pipe.isSupported(),
+    supported: () => pipe.supported(),
     canList: () => true,
     list: () => pipe.list(),
     permission: () => pipe.permission(),
@@ -179,6 +187,7 @@ const nativePipe: ScreenPipe = {
   isSupported() {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   },
+  supported: () => invoke<boolean>("screen_supported"),
   list: () => invoke<ScreenInfo[]>("screen_displays"),
   permission: () => invoke<ScreenPermission>("screen_permission"),
   openSettings: async () => {
@@ -204,6 +213,7 @@ const webScreen: ScreenSource = {
   isSupported() {
     return typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia);
   },
+  supported: async () => true,
   // The browser API deliberately never says what is on the machine; the picker
   // it shows is the enumeration. Full display selection is the platform's job.
   canList: () => false,
@@ -226,6 +236,7 @@ const webScreen: ScreenSource = {
 
 const unsupported: ScreenSource = {
   isSupported: () => false,
+  supported: async () => false,
   canList: () => false,
   list: async () => [],
   permission: async () => "unsupported",
@@ -268,6 +279,7 @@ function current(): ScreenSource {
 
 export const screen: ScreenSource = {
   isSupported: () => current().isSupported(),
+  supported: () => current().supported(),
   canList: () => current().canList(),
   list: () => current().list(),
   permission: () => current().permission(),

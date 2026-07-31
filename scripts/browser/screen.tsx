@@ -132,6 +132,7 @@ const platform = {
 
 const fakePipe: ScreenPipe = {
   isSupported: () => true,
+  supported: async () => true,
   list: async () => displays,
   permission: async () => platform.permission,
   openSettings: async () => {

@@ -17,7 +17,7 @@ import { useLiveSource, type FeedKind } from "../lib/useWebcam";
 import { useHoldRepeat } from "../lib/useHoldRepeat";
 import { AttentionOverlay } from "../components/AttentionOverlay";
 import { FeedPicker } from "../components/FeedPicker";
-import { ScreenDenied, screenFeedOffered } from "../components/ScreenDenied";
+import { ScreenDenied, useScreenOffered } from "../components/ScreenDenied";
 import { SourceToggle } from "../components/SourceToggle";
 import { RatePicker } from "../components/RatePicker";
 import { captureIntervalMs, MAX_IN_FLIGHT, useCaptureRate } from "../lib/captureRate";
@@ -240,7 +240,7 @@ export function UseView() {
   // The camera is what opens, every time. A remembered source would surprise
   // somebody who left the screen running yesterday.
   const [source, setSource] = useState<FeedKind>("camera");
-  const screenOffered = screenFeedOffered();
+  const screenOffered = useScreenOffered();
   const { videoRef, status, error, refused, options, optionId, select, switching, retry } =
     useLiveSource(live, source);
   const [livePrediction, setLivePrediction] = useState<Prediction | null>(null);

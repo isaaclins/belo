@@ -4,13 +4,32 @@
 // on by hand in System Settings. So this panel says that in plain words, opens
 // the exact settings page, and leaves a Try again for when the switch is on.
 
+import { useEffect, useState } from "react";
 import { Monitor } from "@phosphor-icons/react";
 import { screen } from "../lib/screen";
 import { storage } from "../lib/storage";
 
-/** Whether the Screen button belongs in this build on this machine. */
-export function screenFeedOffered(): boolean {
-  return !storage.mobile && screen.isSupported();
+/**
+ * Whether the Screen button belongs in this build on this machine. The platform
+ * has the last word and answers asynchronously, so the switch appears a tick
+ * after the view does rather than appearing and then being taken away.
+ */
+export function useScreenOffered(): boolean {
+  const [offered, setOffered] = useState(false);
+  useEffect(() => {
+    if (storage.mobile || !screen.isSupported()) return;
+    let live = true;
+    void screen
+      .supported()
+      .then((ok) => {
+        if (live) setOffered(ok);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  return offered;
 }
 
 export function ScreenDenied({ onRetry }: { onRetry: () => void }) {

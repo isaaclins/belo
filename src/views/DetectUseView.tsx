@@ -12,7 +12,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import { FeedPicker } from "../components/FeedPicker";
-import { ScreenDenied, screenFeedOffered } from "../components/ScreenDenied";
+import { ScreenDenied, useScreenOffered } from "../components/ScreenDenied";
 import { SourceToggle } from "../components/SourceToggle";
 import { DetectionOverlay } from "../components/DetectionOverlay";
 import { EmptyState, pct, swatch } from "../components/ui";
@@ -94,7 +94,7 @@ export function DetectUseView() {
   const [live, setLive] = useState(false);
   // Camera on open, in both Use views, whatever ran last time.
   const [source, setSource] = useState<FeedKind>("camera");
-  const screenOffered = screenFeedOffered();
+  const screenOffered = useScreenOffered();
   const { videoRef, status, error, refused, options, optionId, select, switching, retry } =
     useLiveSource(live, source);
   const [liveDetections, setLiveDetections] = useState<Detection[]>([]);
