@@ -532,6 +532,19 @@ img, svg { display: block; max-width: 100%; }
   color: #ffffff;
 }
 
+.tile--guess {
+  grid-column: 1 / -1;
+  background: var(--accent);
+}
+
+/* The dashed rectangle in the guess tile, so a guess reads as a guess here too. */
+.guessshot {
+  border: var(--border-w) dashed var(--ink);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  max-width: 420px;
+}
+
 .tile--hold .fineprint { color: #cfd9ff; }
 
 .modeshot {

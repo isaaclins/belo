@@ -24,7 +24,7 @@
 <!-- The custom domain sits behind a CDN that holds static assets for four
      hours, so the stylesheet and the script carry a version query. Bump it
      whenever either file changes. -->
-<link rel="stylesheet" href="styles.css?v=6" />
+<link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body>
 
@@ -65,7 +65,7 @@
   <!-- ================= HERO ================= -->
   <section class="hero" id="top">
     <div class="hero__copy">
-      <p class="chip">v0.7.0 &middot; desktop and iOS</p>
+      <p class="chip">v0.8.0 &middot; desktop and iOS</p>
       <h1>Teach your machine <em>to&nbsp;see</em>.</h1>
       <p class="lead">Show Belo a few pictures of a thing. It learns to spot it. Nothing leaves your device.</p>
       <div class="cta-row">
@@ -420,6 +420,32 @@
       <p>Choose Detect objects when you start a project. Draw boxes around the things you care about, press Train, then use the camera. Belo can find your custom objects and draw a box around each one. It is not limited to a list of common objects someone else chose.</p>
       <p class="fineprint">About 50 to 200 boxes for each label usually helps. Training on desktop is recommended.</p>
     </article>
+
+    <article class="tile tile--guess">
+      <h3>After a while, Belo draws the boxes for you</h3>
+      <p>Box a few pictures yourself. Belo trains on them in the background, and from then on it opens each new picture with its guesses already drawn on it, dashed, with a name and how sure it is. Click a guess to keep it, press its x to throw it away, or just draw your own box straight over it.</p>
+      <p>Keep all of them with one press of enter. Press space instead and Belo keeps them and opens the next picture, so a folder of photographs becomes a row of yes, yes, yes rather than an afternoon of dragging rectangles.</p>
+      <div class="guessshot">
+        <svg viewBox="0 0 300 150" role="img" aria-label="Drawing of a picture in the box drawer with two dashed guesses on it, each with a name and a score, and a button that says keep all.">
+          <rect width="300" height="150" fill="#fffdf8" />
+          <rect x="10" y="10" width="180" height="130" fill="#e7dfcd" stroke="#111014" stroke-width="3" />
+          <g fill="none" stroke="#2f6bff" stroke-width="3" stroke-dasharray="7 5">
+            <rect x="26" y="46" width="66" height="64" />
+          </g>
+          <g fill="none" stroke="#f473b9" stroke-width="3" stroke-dasharray="7 5">
+            <rect x="110" y="56" width="62" height="54" />
+          </g>
+          <text class="t-mono" x="26" y="40" font-size="9" fill="#111014">CAT &middot; 0.91</text>
+          <text class="t-mono" x="110" y="50" font-size="9" fill="#111014">BOWL &middot; 0.74</text>
+          <rect x="202" y="46" width="86" height="28" fill="#ffd83d" stroke="#111014" stroke-width="3" />
+          <text class="t-dis" x="212" y="65" font-size="12" fill="#111014">Keep all 2</text>
+          <text class="t-mono" x="202" y="96" font-size="9" fill="#4a4650">ENTER &middot; KEEP</text>
+          <text class="t-mono" x="202" y="110" font-size="9" fill="#4a4650">SPACE &middot; KEEP,</text>
+          <text class="t-mono" x="202" y="122" font-size="9" fill="#4a4650">THEN NEXT</text>
+        </svg>
+      </div>
+      <p class="fineprint">Made up numbers. A guess is never saved into your project until you keep it, and leaving the picture throws away the ones you did not.</p>
+    </article>
   </section>
 
   <!-- ================= MODEL ================= -->
@@ -561,7 +587,7 @@ npm run tauri build</code></pre>
     <a href="https://github.com/isaaclins/belo/blob/main/README.md">Docs</a>
     <a href="https://github.com/isaaclins/belo/blob/main/LICENSE">MIT license</a>
   </nav>
-  <p class="footer__meta">Version 0.7.0 &middot; MIT</p>
+  <p class="footer__meta">Version 0.8.0 &middot; MIT</p>
 </footer>
 
 <script src="main.js?v=2" defer></script>

@@ -30,7 +30,8 @@ Every new project offers three clear choices:
 ## Detection in three simple steps
 
 1. **Draw boxes.** Add pictures, then drag a box around every object you want Belo to
-   find.
+   find. Once Belo has learned from your first pictures, it opens each new one with its
+   own guesses already drawn on it, dashed, and you mostly just say yes.
 2. **Train.** Belo studies the box labels, positions and sizes. It also practises on
    mirrored copies of your pictures, keeps the round that did best on pictures it had never
    seen, and then tells you in plain words whether it learned the idea or just memorized
@@ -44,6 +45,16 @@ more memory and takes longer. **Show attention is only for classification projec
 detect projects show their detector's actual boxes instead.
 
 ## Useful things you can do
+
+- **Let Belo draw the boxes and just confirm them.** After you have boxed enough pictures
+  by hand, Belo trains itself in the background. From then on, a picture you have not drawn
+  on yet opens with Belo's guesses already on it, as dashed rectangles with a name and how
+  sure it is. Click one to keep it, press its small x to throw it away, or draw your own box
+  straight over it. **Enter** keeps every guess on the picture and **space** keeps them and
+  opens the next one, which is the quick way through a folder of photographs. Nothing is
+  saved into your project until you keep it: leave the picture and the guesses are simply
+  gone. Guesses only appear on pictures you have not drawn on; on one you have, the
+  **Suggest again** button asks for them anyway and still changes nothing on its own.
 
 - **Teach classification from the live camera.** Hold a teaching button to add several
   examples, and choose how quickly Belo takes them.
@@ -125,7 +136,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.7.0**. Desktop, iOS and Android all build.
+Current app version: **0.8.0**. Desktop, iOS and Android all build.
 
 ## Detailed workflow
 
@@ -141,6 +152,9 @@ Current app version: **0.7.0**. Desktop, iOS and Android all build.
    so a portrait frame is letterboxed instead of having its top and bottom cut off. The
    **minus and plus** buttons above the grid pick one of four cell sizes, which changes how
    many fit per row; the choice is remembered across restarts and applies to every project.
+   Once the project has a trained detector, a picture with nothing drawn on it opens with
+   the detector's own guesses on it, dashed, to be kept or thrown away rather than drawn.
+   See [Guesses in the annotator](#guesses-in-the-annotator).
 2. **Train.** One click trains a classifier and reports live progress, training accuracy,
    a holdout score and a per label score. Every image is scored afterwards so you can see
    exactly which ones the model still gets wrong. **Move to X** on a wrong card accepts what
@@ -296,6 +310,59 @@ picture, and closing it clears everything, because the boxes on disk are the tru
 undo counts as a change to the dataset, so it schedules the same background retrain any
 other edit would.
 
+## Guesses in the annotator
+
+Once a detect project has a trained detector, the box annotator stops being a blank sheet.
+A picture with no boxes on it is run through the detector as soon as it is on screen, and
+what comes back is drawn as **guesses**: dashed rectangles in the label's colour, each with
+its name and its score. The Use view's score cutoff is the one they obey, so a person who
+decided that anything under 0.5 is noise gets that everywhere; it lives in
+`src/lib/scoreThreshold.ts` and both views read the same value.
+
+The whole design is one invariant: **a guess is a drawing and nothing else until somebody
+says yes to it.**
+
+- Guesses never reach `project.json`. They are React state in `BoxAnnotator`, they carry a
+  session id that is thrown away, and the only way one becomes a box is `addBox`, the exact
+  call a dragged rectangle makes. Undo covers an acceptance, the project is marked changed,
+  and the debounced background retrain counts the new boxes like any others.
+- Leaving the picture, or closing the annotator, discards every guess that was not accepted,
+  without a prompt and without a toast.
+- A picture that already carries a box gets no guesses. Somebody who drew there has said
+  what is in the picture. **Suggest again** in the side panel asks anyway, and it adds
+  rectangles on top of the drawn ones rather than replacing anything.
+- Keeping one guess does not throw the rest away. The trigger for guessing is an empty
+  picture; the set that came back stays on screen while it is worked through.
+
+The gestures: a press that does not travel more than six pixels keeps that guess, its small
+x throws it away, and **delete** does the same to whichever one is picked. **Enter** keeps
+every guess on the picture and **space** keeps them and turns the page, which is the fast
+path through a confirm streak. A whole batch is one undo step, not one per box. A press on
+a guess is deliberately not stopped from reaching the picture underneath, so the same drag
+that would draw a rectangle across a guess still draws it; only the measured distance
+decides which of the two happened, and the guess layer sits under the committed boxes so a
+real box always wins a press.
+
+Computing the guesses never blocks the picture. The request is started after the frame is
+on screen, it is cancelled if the person turns the page before it lands, and a quiet
+"Looking at this picture" line stands in for it meanwhile. It reads the same packed pair of
+feature maps a training run does, through the store's shared cache in
+`store.proposeBoxes`, so a picture that has already been through a run costs a head pass
+and nothing else, and one that has not leaves its maps behind for the next run to reuse.
+That cache is the memory cost: 588 KB per picture looked at, the same number detect
+training already pays, and it is dropped with the project.
+
+**A retrain that finishes while the annotator is open refreshes the current picture only if
+nobody has decided anything on it yet.** Untouched means no guess kept and none thrown away.
+That is the less glitchy of the two options: an untouched picture has nothing to lose by
+being redrawn from the better model, while swapping rectangles out from under a hand that
+is halfway through deciding about them is exactly the kind of thing that makes a tool feel
+haunted. A picture that has been touched keeps what it started with and picks up the new
+model on the next picture, which is at most one page away.
+
+The first time guesses ever appear, one line explains them and can be dismissed; the
+dismissal is remembered in `localStorage` under `belo.detect.guessHint`, not in the project.
+
 ## How the model works
 
 The classifier is a two-part stack:
@@ -436,7 +503,7 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.7.0",
+  "appVersion": "0.8.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -722,8 +789,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.7.0 && git push origin
-v0.7.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.8.0 && git push origin
+v0.8.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -767,6 +834,19 @@ Useful extras:
   is freshly built rather than trained, because what is being compared is arithmetic and not
   accuracy, and a fresh head at a 0.05 cutoff produces twenty boxes to disagree over. About
   six seconds, and it needs the network for the pinned TensorFlow.js CDN URL.
+- `npm run check:propose` is the closed loop on assisted labeling. In headless Chrome it
+  builds a real detect project, hand boxes twelve pictures, trains the real detector, adds
+  five pictures with nothing drawn on them and mounts the real `BoxAnnotator` on one of
+  them. Every assertion is then made against the component's own DOM and against the
+  manifest behind it: the guesses are drawn dashed and land on the shapes at an overlap
+  above 0.8, clicking one commits exactly that box to within 1e-4 of the rectangle that was
+  drawn, undo takes it back out, the x throws one away and writes nothing, a rectangle
+  dragged across a guess is drawn instead of mistaken for keeping it, walking away leaves
+  the manifest untouched, space keeps them all and turns the page, enter keeps them all and
+  stays, a picture that already has boxes gets no guesses until **Suggest again** is
+  pressed, and a newer model refreshes an untouched picture while leaving one that is being
+  decided about alone. It needs no network, because the extractor is the copy bundled in
+  `public/models`. About six seconds.
 - `npm run check:boxes` runs the detect mode box seam: drawing in every direction, moving
   against the edges of the picture, all eight resize grips, and a save and reopen round
   trip of version 1, 2 and 3 manifests.
