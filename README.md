@@ -58,6 +58,15 @@ detect projects show their detector's actual boxes instead.
 
 - **Teach classification from the live camera.** Hold a teaching button to add several
   examples, and choose how quickly Belo takes them.
+- **Watch a screen instead of a camera.** On a computer, the Use view has a **Camera |
+  Screen** switch. Choose Screen and Belo watches one of your displays exactly the way it
+  watches the camera: it says what it sees, draws its boxes in a detect project, and the
+  same teaching buttons take frames from the screen, so you can teach it from a video, a
+  game, a map or anything else you can put on a display. The first time you try it, macOS
+  asks for permission to record the screen, and if you have said no before, Belo shows you
+  the settings page where you can turn it back on. Belo starts on the camera every time,
+  stopping the screen feed releases it at once, and no screen frame ever leaves your
+  device. Phones have no screen source, so the switch does not appear there.
 - **See classification clues.** Turn on **Show attention** for a colored hint showing
   which parts of the picture influenced each classification answer.
 - **Give one picture several labels.** For example, the same picture can be both
@@ -136,7 +145,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.8.0**. Desktop, iOS and Android all build.
+Current app version: **0.9.0**. Desktop, iOS and Android all build.
 
 ## Detailed workflow
 
@@ -503,7 +512,7 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.8.0",
+  "appVersion": "0.9.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -524,6 +533,7 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
         }
       ],
       "source": "import",        // import | capture | feedback
+      "feed": "screen",          // only on frames taken from a screen; absent means camera
       "addedAt": "..."
     }
   ],
@@ -551,6 +561,10 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
   "settings": { "epochs": 40, "batchSize": 16, "learningRate": 0.001, "hiddenUnits": 100, "validationSplit": 0.15, "augment": false }
 }
 ```
+
+`feed` arrived in 0.9.0 and did not move the format version: it is written only on frames
+taken from a screen, so every project written before it reads exactly as it always did and
+an older Belo ignores a field it does not know.
 
 `model/head.json` stores the head weights as plain arrays, the label order they were
 trained against and the mode they were trained in, so reopening a project restores a
@@ -634,7 +648,7 @@ npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
 ```
 
-Release verification. `npm test` runs all nine in this order and prints how long each one
+Release verification. `npm test` runs all eleven in this order and prints how long each one
 took, which is exactly what CI does:
 
 ```bash
@@ -644,12 +658,14 @@ npm run check:curve       # which epoch a run keeps and what it tells you afterw
 npm run check:store       # model files, saves, retrain policy, checkpoint, undo, summaries
 npm run check:camera      # camera seam against a mocked MediaDevices
 npm run check:camera-live # a real camera session in headless Chrome, with fake devices
+npm run check:screen      # the screen source, driven against a synthetic desktop
 npm run check:overlay     # the multi label attention overlay, trained and painted for real
+npm run check:propose     # the annotator's guesses stay guesses until they are kept
 npm run check:export      # an exported model, unzipped and run outside Belo
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
 
-The three browser checks drive headless Chrome over the DevTools protocol. They never take
+The five browser checks drive headless Chrome over the DevTools protocol. They never take
 over the screen, they serve the app on a free port that is never 1420, and they report
 `skipped` instead of failing on a machine with no Chrome, which is why CI stays green
 without one. `CHROME_PATH` picks a specific browser. `check:export` additionally needs the
@@ -789,8 +805,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.8.0 && git push origin
-v0.8.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.9.0 && git push origin
+v0.9.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -922,10 +938,11 @@ src/
     thumbSize.ts          grid cell size, remembered per machine
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
     capture.ts            CameraSource seam: the only module that calls getUserMedia
+    screen.ts             ScreenSource seam: display capture, native or getDisplayMedia
     store.ts              application store: project, disk writes, feature cache, head
     zoom.ts               kills user page zoom: pinch, double tap and zoom shortcuts
     images.ts             normalization, drag and drop extraction
-    useWebcam.ts          camera session lifecycle on top of capture.ts
+    useWebcam.ts          one live session, camera or screen, over both seams
     types.ts              manifest schema
     ml/backend.ts         WebGL then WASM backend selection
     ml/features.ts        truncated MobileNet feature extractor
@@ -937,6 +954,7 @@ src/
                           DetectUseView (live and single-image detection)
   styles/                 tokens, base, ui primitives, app layout
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
+src-tauri/src/screen.rs   ScreenCaptureKit capture and the JPEG frame path, macOS only
 public/models/            bundled MobileNet weights
 scripts/data/            the committed COCO photograph list eval:real trains on
 ```
@@ -1132,6 +1150,118 @@ what makes front and back switching reliable there.
 
 Reading images back into the grid uses the Tauri asset protocol, scoped to `$HOME` in
 `src-tauri/tauri.conf.json`, because projects can live anywhere under the home directory.
+
+## The screen as a live source
+
+Both Use views carry a **Camera | Screen** switch on the desktop. Selecting Screen puts a
+display into the same stage the camera uses, and everything above the seam, live
+predictions, confidence bars, the teach buttons and their hold to repeat, the detection
+boxes, the attention overlay and Save frame, runs unchanged, because all of it consumes a
+plain `MediaStream`. The switch is hidden on mobile and on any desktop webview that has no
+screen source at all. Belo always opens on the camera; each feed remembers its own pick, so
+going to the screen and back returns to the camera that was running.
+
+### The research verdict
+
+`getDisplayMedia` cannot be used inside Belo's macOS webview, and the reason is worth
+writing down because the API looks available.
+
+A hidden wry webview built against the same versions Belo ships (wry 0.55, tao 0.35) was
+loaded from `http://localhost` and asked what it had. It reported
+`typeof navigator.mediaDevices.getDisplayMedia === "function"`, with the method on the
+prototype, and a call without a user gesture rejected with
+`InvalidStateError: getDisplayMedia must be called from a user gesture handler`, which is
+the standard's own refusal and not a missing feature.
+
+What happens after a gesture is decided in wry, not in the page. WebKit asks its UI
+delegate for permission, and wry implements exactly one of the two callbacks:
+`webView:requestMediaCapturePermissionForOrigin:...` is present in
+`wry/src/wkwebview/class/wry_web_view_ui_delegate.rs` and grants camera and microphone,
+while the display capture callback is absent, so WebKit has no picker to present and
+denies the request. That is the state tauri-apps/wry#1195 describes and it is still open;
+tauri-apps/tauri#2600 records the same conclusion and names ScreenCaptureKit as the way
+out. So on macOS the frames come from Rust.
+
+Windows and Linux keep the browser path: WebView2 implements `getDisplayMedia` with its
+own picker, and WebKitGTK's support depends on the build and the portal, which is why the
+seam checks for the method and hides the switch when it is missing rather than promising
+something the machine cannot do. Neither platform has been smoke tested on real hardware
+by this repository.
+
+### The frame path
+
+`src-tauri/src/screen.rs` starts a ScreenCaptureKit stream over one display, asking for
+BGRA at ten frames a second and at most 1280 pixels on the long edge. Every frame is
+converted to RGB, JPEG encoded at quality 72 and pushed down a Tauri channel as raw bytes.
+The frontend decodes each JPEG with `createImageBitmap`, paints it into a canvas and hands
+`canvas.captureStream()` to the views, which is why nothing above the seam knows the
+difference between a display and a webcam.
+
+That path is not free, and the honest numbers are these. The part Belo adds, the stride
+conversion plus the JPEG encode of one 1280 by 830 frame, measures 6.0 ms on an M series
+laptop against a desktop-like picture and 7.0 ms against pixel noise, which is 6 to 7
+percent of one core at ten frames a second, and produces 57 KB per frame for the desktop
+picture and 319 KB for the noise. Because Tauri's channel only inlines payloads under 1 KB,
+every real frame takes its fetch route: one `eval` on the main thread plus one protocol
+request to collect the bytes. The webview then pays one JPEG decode per frame, and frames
+are dropped rather than queued while a decode is in flight, so a slow machine shows fewer
+frames instead of falling behind. What Apple's own capture costs on top of that has not
+been measured here, because measuring it means recording a real screen. Ten frames a second
+is deliberate: live inference samples the stage every 220 ms, so a faster feed would only be
+discarded. The alternatives, an `IOSurface` handed straight to the compositor or an H.264
+stream, would both need a video element fed by something WKWebView cannot be given from
+Rust, and neither is worth its complexity for a stage that is squared to 224 pixels before
+anything looks at it.
+
+Display enumeration is `SCShareableContent`, listed after the permission is granted, and
+the picker shows each display with its resolution. Window and application capture are not
+offered: ScreenCaptureKit can do both, but picking a window means either a system picker
+that Belo cannot style or a long list of window titles, and a whole display is enough for
+teaching a model. Windows and Linux enumerate nothing, because `getDisplayMedia` deliberately
+answers with its own picker instead.
+
+### Permission
+
+Screen recording on macOS is TCC gated, with no entitlement that can grant it.
+`src-tauri/Info.plist` carries `NSScreenCaptureUsageDescription`, without which the system
+would terminate the app the moment it triggered the prompt. `CGPreflightScreenCaptureAccess`
+is read before every start, so a refusal is known without provoking a dialog, and a refused
+feed shows a panel that says what is wrong in plain words and opens
+`x-apple.systempreferences:...?Privacy_ScreenCapture` directly. macOS only asks once, so
+after a no the settings page is the only way back, and the panel keeps a Try again for the
+moment the switch is flipped.
+
+One build detail: ScreenCaptureKit reaches Apple's framework through a Swift shim, and a
+cargo linked binary has no runpath to the Swift runtime, so `src-tauri/build.rs` adds
+`-rpath /usr/lib/swift` on macOS. Without it the binary dies in dyld before `main`.
+
+### What is checked and what is not
+
+`npm run check:screen` drives the whole live path in headless Chrome against a synthetic
+1443 by 902 desktop, which is a sixteen to ten aspect ratio with odd numbers on both axes
+that no webcam produces. It implements the `ScreenPipe` interface the way macOS does, with
+JPEG frames, and then drives the app's own hook and store: the source toggle stops every
+camera track before the screen arrives, the odd resolution survives the whole frame path,
+the stage shows the screen's own pixels, the letterbox math places the model's square
+correctly at that ratio, switching display releases the first capture, a real model trained
+on the synthetic desktop classifies the live feed and follows it when the content changes, a
+taught frame is written with `feed: "screen"`, leaving the screen releases the capture
+immediately and a refusal is reported as a refusal. The Rust side's own tests cover the
+stride handling, the JPEG encoding and the display fitting, and list the real displays when
+the permission happens to be granted already.
+
+What none of that covers is ScreenCaptureKit itself. The native pipe has to be smoke tested
+by hand, and so does whatever ScreenCaptureKit costs while it runs:
+
+1. `npm run tauri dev`, open any trained project and go to Use.
+2. Press **Screen**. Grant the permission when macOS asks, then press Try again.
+3. Check that the stage shows the display, that the purple recording indicator is lit, and
+   that the predictions follow what you put on screen.
+4. With two displays connected, switch between them in the picker and confirm the stage
+   follows.
+5. Press Stop, and confirm the purple indicator goes out at once.
+6. Deny the permission in System Settings and press Screen again: the guidance panel has to
+   appear instead of an error, and its button has to open the right settings page.
 
 ## License
 
