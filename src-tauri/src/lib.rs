@@ -16,6 +16,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod screen;
+
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -709,7 +711,14 @@ pub fn run() {
             recent_projects,
             remember_project,
             forget_project,
-            delete_project
+            delete_project,
+            screen::screen_supported,
+            screen::screen_permission,
+            screen::screen_request_permission,
+            screen::screen_displays,
+            screen::screen_start,
+            screen::screen_stop,
+            screen::screen_open_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running Belo");

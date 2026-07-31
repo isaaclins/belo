@@ -4,5 +4,7 @@
   <dict>
     <key>NSCameraUsageDescription</key>
     <string>Belo uses the camera to capture training images and to run live classification. Images stay on this device.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Belo can watch a display instead of the camera, so you can teach it from what is on your screen. Frames stay on this device.</string>
   </dict>
 </plist>
