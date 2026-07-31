@@ -22,6 +22,7 @@ import {
   type BoxRecord,
   type ImageRecord,
   type ImageSource,
+  type LiveFeed,
   type Label,
   type ModelMeta,
   type ProjectManifest,
@@ -238,6 +239,8 @@ interface State {
     source: Drawable,
     labels: string | string[] | null,
     origin: ImageSource,
+    /** Which live feed the frame came from. Omitted for imports and stills. */
+    feed?: LiveFeed,
   ) => Promise<boolean>;
   moveImages: (imageIds: string[], labelId: string | null) => void;
   /** Train view: relabels a scored image to what the model read and refreshes the results. */
@@ -1244,6 +1247,7 @@ export const useStore = create<State>((set, get) => {
     jpegBase64: string,
     labels: string | string[] | null,
     origin: ImageSource,
+    feed?: LiveFeed,
   ): Promise<ImageRecord> => {
     const path = get().path;
     if (!path) throw new Error("No project is open");
@@ -1257,6 +1261,9 @@ export const useStore = create<State>((set, get) => {
       file,
       labelId: null,
       source: origin,
+      // Absent for the camera, so a project only carries the field when it has
+      // something to say.
+      ...(feed === "screen" ? { feed } : {}),
       addedAt: new Date().toISOString(),
     };
     const labelled = withLabels(record, ids, mode);
@@ -1774,13 +1781,13 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    async addFromDrawable(source, labels, origin) {
+    async addFromDrawable(source, labels, origin, feed) {
       const manifest = get().manifest;
       const path = get().path;
       if (!manifest || !path) return false;
       try {
         const jpeg = normalizeToJpegBase64(source);
-        const record = await writeImageRecord(jpeg, labels, origin);
+        const record = await writeImageRecord(jpeg, labels, origin, feed);
         if (get().path !== path) {
           await storage.deleteImages(path, [record.file]);
           return false;

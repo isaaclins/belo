@@ -5,12 +5,15 @@ import {
   CircleNotch,
   FloppyDisk,
   Image as ImageIcon,
+  Monitor,
   Play,
   Stop,
   VideoCamera,
   Warning,
 } from "@phosphor-icons/react";
-import { CameraPicker } from "../components/CameraPicker";
+import { FeedPicker } from "../components/FeedPicker";
+import { ScreenDenied, screenFeedOffered } from "../components/ScreenDenied";
+import { SourceToggle } from "../components/SourceToggle";
 import { DetectionOverlay } from "../components/DetectionOverlay";
 import { EmptyState, pct, swatch } from "../components/ui";
 import type { Detection } from "../lib/detect";
@@ -23,7 +26,7 @@ import {
   useScoreThreshold,
   type ScoreThreshold,
 } from "../lib/scoreThreshold";
-import { useWebcam } from "../lib/useWebcam";
+import { useLiveSource, type FeedKind } from "../lib/useWebcam";
 
 const TICK_MS = 220;
 
@@ -89,8 +92,11 @@ export function DetectUseView() {
   // Shared with the box annotator's guesses, so one cutoff governs the app.
   const threshold = useScoreThreshold();
   const [live, setLive] = useState(false);
-  const { videoRef, status, error, cameras, deviceId, selectCamera, switching, retry } =
-    useWebcam(live);
+  // Camera on open, in both Use views, whatever ran last time.
+  const [source, setSource] = useState<FeedKind>("camera");
+  const screenOffered = screenFeedOffered();
+  const { videoRef, status, error, refused, options, optionId, select, switching, retry } =
+    useLiveSource(live, source);
   const [liveDetections, setLiveDetections] = useState<Detection[]>([]);
   const [savingFrame, setSavingFrame] = useState(false);
   const liveInferenceRef = useRef(false);
@@ -216,7 +222,7 @@ export function DetectUseView() {
     if (!video || video.videoWidth === 0 || savingFrame) return;
     setSavingFrame(true);
     try {
-      const saved = await addFromDrawable(toSquareCanvas(video), null, "capture");
+      const saved = await addFromDrawable(toSquareCanvas(video), null, "capture", source);
       if (saved) toast("Frame saved. Open Label to draw its boxes.", "good");
     } finally {
       setSavingFrame(false);
@@ -248,12 +254,26 @@ export function DetectUseView() {
       <section className="card use__live">
         <div className="card__head">
           <h3>
-            <VideoCamera size={16} weight="bold" /> Live detection
+            {source === "screen" ? (
+              <Monitor size={16} weight="bold" />
+            ) : (
+              <VideoCamera size={16} weight="bold" />
+            )}{" "}
+            Live detection
           </h3>
           <div className="card__tools">
             <ThresholdPicker value={threshold} onChange={setScoreThreshold} />
+            {screenOffered ? (
+              <SourceToggle value={source} onPick={setSource} disabled={switching} />
+            ) : null}
             {live ? (
-              <CameraPicker cameras={cameras} deviceId={deviceId} onPick={selectCamera} compact />
+              <FeedPicker
+                what={source === "screen" ? "Screen" : "Camera"}
+                options={options}
+                optionId={optionId}
+                onPick={select}
+                compact
+              />
             ) : null}
             <button
               className={live ? "btn btn--sm btn--danger" : "btn btn--sm btn--go"}
@@ -277,9 +297,15 @@ export function DetectUseView() {
           ) : null}
           {!live ? (
             <div className="use__veil">
-              <VideoCamera size={28} weight="bold" />
-              <p>The camera is off</p>
+              {source === "screen" ? (
+                <Monitor size={28} weight="bold" />
+              ) : (
+                <VideoCamera size={28} weight="bold" />
+              )}
+              <p>{source === "screen" ? "The screen feed is off" : "The camera is off"}</p>
             </div>
+          ) : status === "error" && refused && source === "screen" ? (
+            <ScreenDenied onRetry={retry} />
           ) : status === "error" ? (
             <div className="use__veil">
               <Warning size={26} weight="bold" />
@@ -290,8 +316,20 @@ export function DetectUseView() {
             </div>
           ) : status !== "live" ? (
             <div className="use__veil">
-              <VideoCamera size={28} weight="bold" />
-              <p>{switching ? "Switching camera" : "Waking the camera"}</p>
+              {source === "screen" ? (
+                <Monitor size={28} weight="bold" />
+              ) : (
+                <VideoCamera size={28} weight="bold" />
+              )}
+              <p>
+                {source === "screen"
+                  ? switching
+                    ? "Switching display"
+                    : "Starting the screen feed"
+                  : switching
+                    ? "Switching camera"
+                    : "Waking the camera"}
+              </p>
             </div>
           ) : null}
         </div>

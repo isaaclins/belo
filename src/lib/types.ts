@@ -30,6 +30,13 @@ export const DETECT_MIN_IMAGES = 10;
 export type ImageSource = "import" | "capture" | "feedback";
 
 /**
+ * Which live feed a captured frame came from. Absent means the camera, which is
+ * what every project written before Belo 0.9 recorded and the only feed a phone
+ * has, so nothing has to be migrated.
+ */
+export type LiveFeed = "camera" | "screen";
+
+/**
  * single: softmax over the labels, exactly one winner per image.
  * multi:  one sigmoid per label, so an image can be "X and Y but not Z".
  * detect: labels live on drawn boxes rather than on whole images.
@@ -75,6 +82,8 @@ export interface ImageRecord {
    */
   boxes?: BoxRecord[];
   source: ImageSource;
+  /** Only written for frames taken from the screen. */
+  feed?: LiveFeed;
   addedAt: string;
 }
 

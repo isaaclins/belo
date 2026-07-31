@@ -1264,6 +1264,74 @@
   outline-offset: -3px;
 }
 
+/* Camera or screen, the same segmented shape as the score threshold so a card
+   header never carries two different kinds of switch. */
+.srcpick {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.srcpick legend {
+  float: left;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.srcpick__steps {
+  display: flex;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: 2px 2px 0 var(--ink);
+  overflow: hidden;
+}
+
+.srcpick__step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 2px 8px;
+  background: var(--panel);
+  border: 0;
+  border-right: 2px solid var(--ink);
+  font-family: var(--font-display);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.srcpick__step:last-child {
+  border-right: 0;
+}
+
+.srcpick__step--on {
+  background: var(--accent);
+}
+
+.srcpick__step:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.srcpick__step:focus-visible {
+  position: relative;
+  outline: 3px solid var(--accent-2);
+  outline-offset: -3px;
+}
+
+.use__veil-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  justify-content: center;
+}
+
 .detectionlist {
   display: flex;
   flex-direction: column;
@@ -2434,6 +2502,10 @@
 
   .threshold__step {
     min-width: 44px;
+    min-height: 44px;
+  }
+
+  .srcpick__step {
     min-height: 44px;
   }
 

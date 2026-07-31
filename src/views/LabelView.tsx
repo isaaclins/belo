@@ -447,8 +447,12 @@ export function LabelView() {
                       draggable={false}
                     />
                     {detect ? <BoxSketch image={image} labels={labels} /> : null}
-                    {image.source === "capture" ? <span className="tile__tag">cam</span> : null}
-                    {image.source === "feedback" ? <span className="tile__tag">fix</span> : null}
+                    {image.source === "capture" ? (
+                      <span className="tile__tag">{image.feed === "screen" ? "screen" : "cam"}</span>
+                    ) : null}
+                    {image.source === "feedback" ? (
+                      <span className="tile__tag">{image.feed === "screen" ? "screen fix" : "fix"}</span>
+                    ) : null}
                     {multi && labelsOf(image).length > 1 ? (
                       <span className="tile__labels">
                         {labelsOf(image).map((id) => (

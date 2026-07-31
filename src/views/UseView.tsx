@@ -4,6 +4,7 @@ import {
   Check,
   CircleNotch,
   Image as ImageIcon,
+  Monitor,
   Play,
   PlusCircle,
   Stop,
@@ -12,10 +13,12 @@ import {
 } from "@phosphor-icons/react";
 import { MULTI_THRESHOLD } from "../lib/types";
 import { useStore, type Prediction } from "../lib/store";
-import { useWebcam } from "../lib/useWebcam";
+import { useLiveSource, type FeedKind } from "../lib/useWebcam";
 import { useHoldRepeat } from "../lib/useHoldRepeat";
 import { AttentionOverlay } from "../components/AttentionOverlay";
-import { CameraPicker } from "../components/CameraPicker";
+import { FeedPicker } from "../components/FeedPicker";
+import { ScreenDenied, screenFeedOffered } from "../components/ScreenDenied";
+import { SourceToggle } from "../components/SourceToggle";
 import { RatePicker } from "../components/RatePicker";
 import { captureIntervalMs, MAX_IN_FLIGHT, useCaptureRate } from "../lib/captureRate";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
@@ -234,8 +237,12 @@ export function UseView() {
   const setAttentionOn = useStore((s) => s.setAttentionOn);
 
   const [live, setLive] = useState(false);
-  const { videoRef, status, error, cameras, deviceId, selectCamera, switching, retry } =
-    useWebcam(live);
+  // The camera is what opens, every time. A remembered source would surprise
+  // somebody who left the screen running yesterday.
+  const [source, setSource] = useState<FeedKind>("camera");
+  const screenOffered = screenFeedOffered();
+  const { videoRef, status, error, refused, options, optionId, select, switching, retry } =
+    useLiveSource(live, source);
   const [livePrediction, setLivePrediction] = useState<Prediction | null>(null);
 
   const inFlight = useRef(0);
@@ -328,7 +335,7 @@ export function UseView() {
     if (!video || video.videoWidth === 0) return false;
     if (inFlight.current >= MAX_IN_FLIGHT) return false;
     inFlight.current += 1;
-    void addFromDrawable(toSquareCanvas(video), labelIds, "feedback").finally(() => {
+    void addFromDrawable(toSquareCanvas(video), labelIds, "feedback", source).finally(() => {
       inFlight.current -= 1;
     });
     return true;
@@ -382,14 +389,23 @@ export function UseView() {
       <section className="card use__live">
         <div className="card__head">
           <h3>
-            <VideoCamera size={16} weight="bold" /> Live camera
+            {source === "screen" ? (
+              <Monitor size={16} weight="bold" />
+            ) : (
+              <VideoCamera size={16} weight="bold" />
+            )}{" "}
+            {source === "screen" ? "Live screen" : "Live camera"}
           </h3>
           <div className="card__tools">
+            {screenOffered ? (
+              <SourceToggle value={source} onPick={setSource} disabled={switching} />
+            ) : null}
             {live ? (
-              <CameraPicker
-                cameras={cameras}
-                deviceId={deviceId}
-                onPick={selectCamera}
+              <FeedPicker
+                what={source === "screen" ? "Screen" : "Camera"}
+                options={options}
+                optionId={optionId}
+                onPick={select}
                 compact
               />
             ) : null}
@@ -429,9 +445,15 @@ export function UseView() {
           ) : null}
           {!live ? (
             <div className="use__veil">
-              <VideoCamera size={28} weight="bold" />
-              <p>The camera is off</p>
+              {source === "screen" ? (
+                <Monitor size={28} weight="bold" />
+              ) : (
+                <VideoCamera size={28} weight="bold" />
+              )}
+              <p>{source === "screen" ? "The screen feed is off" : "The camera is off"}</p>
             </div>
+          ) : status === "error" && refused && source === "screen" ? (
+            <ScreenDenied onRetry={retry} />
           ) : status === "error" ? (
             <div className="use__veil">
               <Warning size={26} weight="bold" />
@@ -442,8 +464,20 @@ export function UseView() {
             </div>
           ) : status !== "live" ? (
             <div className="use__veil">
-              <VideoCamera size={28} weight="bold" />
-              <p>{switching ? "Switching camera" : "Waking the camera"}</p>
+              {source === "screen" ? (
+                <Monitor size={28} weight="bold" />
+              ) : (
+                <VideoCamera size={28} weight="bold" />
+              )}
+              <p>
+                {source === "screen"
+                  ? switching
+                    ? "Switching display"
+                    : "Starting the screen feed"
+                  : switching
+                    ? "Switching camera"
+                    : "Waking the camera"}
+              </p>
             </div>
           ) : null}
 
