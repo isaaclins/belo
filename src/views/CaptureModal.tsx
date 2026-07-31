@@ -4,7 +4,7 @@ import { useStore } from "../lib/store";
 import { useWebcam } from "../lib/useWebcam";
 import { toSquareCanvas } from "../lib/images";
 import { Modal, swatch } from "../components/ui";
-import { CameraPicker } from "../components/CameraPicker";
+import { FeedPicker } from "../components/FeedPicker";
 import { RatePicker } from "../components/RatePicker";
 import { captureIntervalMs, MAX_IN_FLIGHT, useCaptureRate } from "../lib/captureRate";
 import type { Label } from "../lib/types";
@@ -142,9 +142,10 @@ export function CaptureModal({ label, onClose }: { label: Label | null; onClose:
             Hold the button or the space bar and move the object around, {rate} frames per second.
           </p>
 
-          <CameraPicker
-            cameras={cameras}
-            deviceId={deviceId}
+          <FeedPicker
+            what="Camera"
+            options={cameras.map((entry) => ({ id: entry.deviceId, label: entry.label }))}
+            optionId={deviceId}
             onPick={selectCamera}
             disabled={bursting}
           />
