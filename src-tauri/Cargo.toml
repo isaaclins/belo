@@ -25,8 +25,14 @@ tauri-plugin-fs = "2"
 # the frames come from ScreenCaptureKit instead. Windows and Linux use their
 # webview's own getDisplayMedia and compile none of this.
 [target.'cfg(target_os = "macos")'.dependencies]
-screencapturekit = "8"
-core-graphics = "0.25"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSError", "NSString"] }
+objc2-screen-capture-kit = { version = "0.3", features = ["SCStream", "SCShareableContent", "SCError", "block2", "dispatch2", "objc2-core-media", "objc2-core-graphics"] }
+objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime", "CMFormatDescription"] }
+objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn"] }
+objc2-core-graphics = { version = "0.3", features = ["CGWindow", "CGDirectDisplay", "CGError"] }
+block2 = "0.6"
+dispatch2 = "0.3"
 # Frames of the screen feed travel as JPEG. Pure Rust, no system codec.
 jpeg-encoder = "0.6"
 

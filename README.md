@@ -1231,9 +1231,13 @@ feed shows a panel that says what is wrong in plain words and opens
 after a no the settings page is the only way back, and the panel keeps a Try again for the
 moment the switch is flipped.
 
-One build detail: ScreenCaptureKit reaches Apple's framework through a Swift shim, and a
-cargo linked binary has no runpath to the Swift runtime, so `src-tauri/build.rs` adds
-`-rpath /usr/lib/swift` on macOS. Without it the binary dies in dyld before `main`.
+One build detail, learned the hard way. The convenience crate for this framework,
+`screencapturekit`, reaches Apple through a Swift bridge and drags in `apple-metal`, whose
+Swift sources need the macOS 15 SDK; CI builds the Rust side on `macos-14` and it failed
+there while compiling happily on a newer Xcode locally. The bindings used instead are the
+plain `objc2-screen-capture-kit` ones, which are generated Rust with no Swift toolchain, no
+Metal and no runpath to add, and the frame handler is an `objc2` class implementing
+`SCStreamOutput` written out in `src-tauri/src/screen.rs`.
 
 ### What is checked and what is not
 
@@ -1247,8 +1251,9 @@ correctly at that ratio, switching display releases the first capture, a real mo
 on the synthetic desktop classifies the live feed and follows it when the content changes, a
 taught frame is written with `feed: "screen"`, leaving the screen releases the capture
 immediately and a refusal is reported as a refusal. The Rust side's own tests cover the
-stride handling, the JPEG encoding and the display fitting, and list the real displays when
-the permission happens to be granted already.
+stride handling, the JPEG encoding and the display fitting, and list the real displays
+through the actual bindings when the permission happens to be granted already, which is
+what proves the objc2 side links and answers.
 
 What none of that covers is ScreenCaptureKit itself. The native pipe has to be smoke tested
 by hand, and so does whatever ScreenCaptureKit costs while it runs:

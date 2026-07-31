@@ -116,23 +116,118 @@ pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
 
 #[cfg(target_os = "macos")]
 mod mac {
+    // ScreenCaptureKit through the objc2 bindings, which are plain Rust: no
+    // Swift toolchain, no Metal, nothing that needs an SDK newer than the one
+    // that builds the rest of the app. The convenience crate that wraps this
+    // framework pulls a Swift bridge that fails to compile on the macOS 14 SDK
+    // CI builds on, which is why the messy part is written out here.
     use super::{bgra_to_rgb, encode_jpeg, fit_within, DisplayInfo, FeedInfo, MAX_EDGE};
-    use core_graphics::access::ScreenCaptureAccess;
-    use screencapturekit::cm::SCFrameStatus;
-    use screencapturekit::cv::CVPixelBufferLockFlags;
-    use screencapturekit::prelude::*;
+    use block2::RcBlock;
+    use dispatch2::DispatchQueue;
+    use objc2::rc::Retained;
+    use objc2::runtime::{NSObject, ProtocolObject};
+    use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
+    use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+    use objc2_core_media::{CMSampleBuffer, CMTime};
+    use objc2_core_video::{
+        CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
+        CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress,
+        CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    };
+    use objc2_foundation::NSObjectProtocol;
+    use objc2_screen_capture_kit::{
+        SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamOutput,
+        SCStreamOutputType,
+    };
+    use std::sync::mpsc;
     use std::sync::Mutex;
+    use std::time::Duration;
     use tauri::ipc::{Channel, InvokeResponseBody};
 
-    /// One capture at a time. Holding the stream here is what makes stopping
-    /// immediate: dropping or stopping it releases ScreenCaptureKit, which is
+    /// BGRA, the four character code CoreVideo wants for 32 bit little endian.
+    const PIXEL_FORMAT_BGRA: u32 = u32::from_be_bytes(*b"BGRA");
+    /// ScreenCaptureKit answers its content query on another queue.
+    const CONTENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// The running capture. Holding it here is what makes stopping immediate:
+    /// stopping and dropping the stream releases ScreenCaptureKit, which is
     /// what turns the purple recording indicator off.
-    static RUNNING: Mutex<Option<SCStream>> = Mutex::new(None);
+    static RUNNING: Mutex<Option<Capture>> = Mutex::new(None);
+
+    struct Capture {
+        stream: Retained<SCStream>,
+        output: Retained<FrameOutput>,
+    }
+
+    // Apple calls the output handler on its own queue, and the two Retained
+    // pointers are only ever touched under the mutex above.
+    unsafe impl Send for Capture {}
+
+    struct FrameSink {
+        channel: Channel<InvokeResponseBody>,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "BeloScreenFrameOutput"]
+        #[ivars = FrameSink]
+        struct FrameOutput;
+
+        unsafe impl NSObjectProtocol for FrameOutput {}
+
+        unsafe impl SCStreamOutput for FrameOutput {
+            #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
+            fn did_output(
+                &self,
+                _stream: &SCStream,
+                sample: &CMSampleBuffer,
+                kind: SCStreamOutputType,
+            ) {
+                if kind != SCStreamOutputType::Screen {
+                    return;
+                }
+                let Some(jpeg) = encode_sample(sample) else {
+                    return;
+                };
+                // A closed channel means the view is gone. Releasing the capture
+                // is the stop command's job, so there is nothing to do here.
+                let _ = self.ivars().channel.send(InvokeResponseBody::Raw(jpeg));
+            }
+        }
+    );
+
+    impl FrameOutput {
+        fn new(channel: Channel<InvokeResponseBody>) -> Retained<Self> {
+            let this = Self::alloc().set_ivars(FrameSink { channel });
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// One frame, from CoreVideo's padded BGRA to the JPEG the webview decodes.
+    fn encode_sample(sample: &CMSampleBuffer) -> Option<Vec<u8>> {
+        let image = unsafe { sample.image_buffer() }?;
+        let buffer: &CVPixelBuffer = &image;
+        unsafe { CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) };
+        let width = CVPixelBufferGetWidth(buffer);
+        let height = CVPixelBufferGetHeight(buffer);
+        let stride = CVPixelBufferGetBytesPerRow(buffer);
+        let base = CVPixelBufferGetBaseAddress(buffer);
+        let jpeg = if base.is_null() || width == 0 || height == 0 {
+            None
+        } else {
+            let pixels =
+                unsafe { std::slice::from_raw_parts(base as *const u8, stride * height) };
+            bgra_to_rgb(pixels, width as u32, height as u32, stride)
+                .and_then(|rgb| encode_jpeg(&rgb, width as u32, height as u32).ok())
+        };
+        unsafe { CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) };
+        jpeg
+    }
 
     pub fn permission() -> &'static str {
         // preflight never prompts, so a view can render the right panel without
         // provoking a system dialog nobody asked for.
-        if ScreenCaptureAccess.preflight() {
+        if CGPreflightScreenCaptureAccess() {
             "granted"
         } else {
             "denied"
@@ -143,23 +238,44 @@ mod mac {
     /// The system only ever shows its prompt once per app; after a denial it
     /// silently says no and the user has to go to System Settings.
     pub fn request_permission() -> bool {
-        ScreenCaptureAccess.request()
+        CGRequestScreenCaptureAccess()
+    }
+
+    /// The displays ScreenCaptureKit is willing to share, waited for on this
+    /// thread because every caller here is a command that has to answer.
+    fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
+        let (sender, receiver) = mpsc::channel::<Result<Retained<SCShareableContent>, String>>();
+        let handler = RcBlock::new(move |content: *mut SCShareableContent, error: *mut objc2_foundation::NSError| {
+            let answer = if content.is_null() {
+                Err(if error.is_null() {
+                    "ScreenCaptureKit returned no content".to_string()
+                } else {
+                    unsafe { (*error).localizedDescription() }.to_string()
+                })
+            } else {
+                Ok(unsafe { Retained::retain(content) }.expect("content is not null"))
+            };
+            let _ = sender.send(answer);
+        });
+        unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
+        receiver
+            .recv_timeout(CONTENT_TIMEOUT)
+            .map_err(|_| "ScreenCaptureKit did not answer in time".to_string())?
     }
 
     pub fn displays() -> Result<Vec<DisplayInfo>, String> {
-        if !ScreenCaptureAccess.preflight() {
+        if !CGPreflightScreenCaptureAccess() {
             return Err("denied".into());
         }
-        let content = SCShareableContent::get().map_err(|err| format!("{err}"))?;
-        Ok(content
-            .displays()
+        let content = shareable_content()?;
+        Ok(unsafe { content.displays() }
             .iter()
             .enumerate()
             .map(|(index, display)| DisplayInfo {
-                id: display.display_id().to_string(),
+                id: unsafe { display.displayID() }.to_string(),
                 label: format!("Display {}", index + 1),
-                width: display.width(),
-                height: display.height(),
+                width: unsafe { display.width() } as u32,
+                height: unsafe { display.height() } as u32,
             })
             .collect())
     }
@@ -169,77 +285,85 @@ mod mac {
         fps: u32,
         on_frame: Channel<InvokeResponseBody>,
     ) -> Result<FeedInfo, String> {
-        if !ScreenCaptureAccess.preflight() {
+        if !CGPreflightScreenCaptureAccess() {
             return Err("denied".into());
         }
         stop()?;
 
-        let content = SCShareableContent::get().map_err(|err| format!("{err}"))?;
-        let all = content.displays();
+        let content = shareable_content()?;
+        let all = unsafe { content.displays() };
         let wanted = display_id.as_deref().and_then(|id| id.parse::<u32>().ok());
         // A remembered display that is no longer attached falls back to the
         // first one rather than failing to start, the way a missing camera does.
         let display = wanted
-            .and_then(|id| all.iter().find(|d| d.display_id() == id))
-            .or_else(|| all.first())
+            .and_then(|id| all.iter().find(|d| unsafe { d.displayID() } == id))
+            .or_else(|| all.iter().next())
             .ok_or_else(|| "This Mac reports no display to capture".to_string())?;
 
-        let (width, height) = fit_within(display.width(), display.height(), MAX_EDGE);
-        let interval = CMTime::new(1, fps.clamp(1, 30) as i32);
-        let filter = SCContentFilter::create()
-            .with_display(display)
-            .with_excluding_windows(&[])
-            .build();
-        let config = SCStreamConfiguration::new()
-            .with_width(width)
-            .with_height(height)
-            .with_pixel_format(PixelFormat::BGRA)
-            .with_shows_cursor(true)
-            .with_queue_depth(3)
-            .with_minimum_frame_interval(&interval);
-
-        let mut stream = SCStream::new(&filter, &config);
-        stream.add_output_handler(
-            move |sample: CMSampleBuffer, _: SCStreamOutputType| {
-                // Idle frames carry no new pixels and blank ones carry none at
-                // all. Forwarding either would just cost an encode.
-                if !matches!(
-                    sample.frame_status(),
-                    Some(SCFrameStatus::Complete) | Some(SCFrameStatus::Started)
-                ) {
-                    return;
-                }
-                let Some(buffer) = sample.image_buffer() else {
-                    return;
-                };
-                let Ok(guard) = buffer.lock(CVPixelBufferLockFlags::READ_ONLY) else {
-                    return;
-                };
-                let width = guard.width() as u32;
-                let height = guard.height() as u32;
-                let Some(rgb) = bgra_to_rgb(guard.as_slice(), width, height, guard.bytes_per_row())
-                else {
-                    return;
-                };
-                let Ok(jpeg) = encode_jpeg(&rgb, width, height) else {
-                    return;
-                };
-                // A closed channel means the view is gone; the stop command is
-                // what actually releases the capture, so nothing to do here.
-                let _ = on_frame.send(InvokeResponseBody::Raw(jpeg));
-            },
-            SCStreamOutputType::Screen,
+        let (width, height) = fit_within(
+            unsafe { display.width() } as u32,
+            unsafe { display.height() } as u32,
+            MAX_EDGE,
         );
-        stream
-            .start_capture()
-            .map_err(|err| format!("The screen feed could not start: {err}"))?;
+
+        let filter = unsafe {
+            SCContentFilter::initWithDisplay_excludingWindows(
+                SCContentFilter::alloc(),
+                &display,
+                &objc2_foundation::NSArray::new(),
+            )
+        };
+        let config = unsafe { SCStreamConfiguration::new() };
+        unsafe {
+            config.setWidth(width as usize);
+            config.setHeight(height as usize);
+            config.setPixelFormat(PIXEL_FORMAT_BGRA);
+            config.setShowsCursor(true);
+            config.setQueueDepth(3);
+            config.setMinimumFrameInterval(CMTime::with_seconds(
+                1.0 / fps.clamp(1, 30) as f64,
+                600,
+            ));
+        }
+
+        let stream = unsafe {
+            SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, None)
+        };
+        let output = FrameOutput::new(on_frame);
+        let queue = DispatchQueue::new("com.belo.screen", None);
+        unsafe {
+            stream.addStreamOutput_type_sampleHandlerQueue_error(
+                ProtocolObject::from_ref(&*output),
+                SCStreamOutputType::Screen,
+                Some(&queue),
+            )
+        }
+        .map_err(|err| format!("The screen feed could not start: {}", err.localizedDescription()))?;
+
+        // startCapture answers asynchronously, and a failure here is the whole
+        // difference between a black stage and an honest message.
+        let (sender, receiver) = mpsc::channel::<Option<String>>();
+        let handler = RcBlock::new(move |error: *mut objc2_foundation::NSError| {
+            let _ = sender.send(if error.is_null() {
+                None
+            } else {
+                Some(unsafe { (*error).localizedDescription() }.to_string())
+            });
+        });
+        unsafe { stream.startCaptureWithCompletionHandler(Some(&handler)) };
+        match receiver.recv_timeout(CONTENT_TIMEOUT) {
+            Ok(None) => {}
+            Ok(Some(message)) => return Err(format!("The screen feed could not start: {message}")),
+            Err(_) => return Err("The screen feed did not start in time".into()),
+        }
 
         let info = FeedInfo {
-            id: display.display_id().to_string(),
+            id: unsafe { display.displayID() }.to_string(),
             width,
             height,
         };
-        *RUNNING.lock().map_err(|_| "capture state is poisoned")? = Some(stream);
+        *RUNNING.lock().map_err(|_| "capture state is poisoned")? =
+            Some(Capture { stream, output });
         Ok(info)
     }
 
@@ -248,11 +372,23 @@ mod mac {
             .lock()
             .map_err(|_| "capture state is poisoned")?
             .take();
-        if let Some(stream) = taken {
-            stream
-                .stop_capture()
-                .map_err(|err| format!("The screen feed could not stop: {err}"))?;
+        let Some(capture) = taken else {
+            return Ok(());
+        };
+        let (sender, receiver) = mpsc::channel::<()>();
+        let handler = RcBlock::new(move |_error: *mut objc2_foundation::NSError| {
+            let _ = sender.send(());
+        });
+        unsafe {
+            let _ = capture.stream.removeStreamOutput_type_error(
+                ProtocolObject::from_ref(&*capture.output),
+                SCStreamOutputType::Screen,
+            );
+            capture.stream.stopCaptureWithCompletionHandler(Some(&handler));
         }
+        // The stream is dropped either way: waiting is only so the caller knows
+        // the indicator is out by the time the command returns.
+        let _ = receiver.recv_timeout(CONTENT_TIMEOUT);
         Ok(())
     }
 
