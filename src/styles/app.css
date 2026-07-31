@@ -1721,12 +1721,59 @@
 }
 
 .anno__stage {
+  position: relative;
   display: grid;
   place-items: center;
   min-width: 0;
   min-height: 0;
   padding: var(--s4);
   background: repeating-linear-gradient(45deg, var(--paper-deep) 0 6px, var(--paper) 6px 12px);
+}
+
+/* Shown once, the first time the detector draws anything in the annotator. */
+.anno__firsthint {
+  position: absolute;
+  top: var(--s3);
+  left: 50%;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  max-width: min(560px, calc(100% - var(--s6)));
+  margin: 0;
+  padding: var(--s2) var(--s2) var(--s2) var(--s3);
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: var(--ink);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.anno__firsthint-x {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.anno__thinking {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.anno__thinking svg {
+  animation: spin 0.9s linear infinite;
 }
 
 /* Sized in JS from the picture's own ratio, so the box layer sits on the
@@ -1776,6 +1823,66 @@
 
 .abox--tiny {
   border-color: var(--ink-soft);
+}
+
+/* One guess from the detector. Dashed and tinted, so a rectangle nobody has
+   agreed to yet can never be mistaken for a box that is really in the project.
+   It sits under the committed boxes, because a real box always wins a press. */
+.aprop {
+  position: absolute;
+  z-index: 1;
+  border: var(--border-w) dashed var(--ink);
+  background: rgba(255, 255, 255, 0.14);
+  cursor: copy;
+  touch-action: none;
+}
+
+.aprop--on {
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
+.aprop__tag {
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  transform: translateY(-100%);
+  max-width: 190px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 1px 6px;
+  background: var(--paper);
+  border: var(--border-w-thin) dashed currentColor;
+  font-family: var(--font-display);
+  font-size: 11px;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.aprop__drop {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .aprop__drop {
+    top: -15px;
+    right: -15px;
+    width: 30px;
+    height: 30px;
+  }
 }
 
 .abox__tag {

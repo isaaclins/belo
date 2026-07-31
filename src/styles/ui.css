@@ -469,6 +469,11 @@
 .badge--idle {
   background: var(--paper-deep);
 }
+/* The detector's guesses: dashed, like the rectangles it is counting. */
+.badge--guess {
+  background: var(--paper);
+  border-style: dashed;
+}
 
 .dot {
   width: 12px;

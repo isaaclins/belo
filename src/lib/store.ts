@@ -74,7 +74,7 @@ import {
   type TrainProgress,
 } from "./ml/classifier";
 
-export const APP_VERSION = "0.7.0";
+export const APP_VERSION = "0.8.0";
 
 export type View = "label" | "train" | "use";
 
@@ -279,6 +279,16 @@ interface State {
   predict: (source: Drawable, wantAttention?: boolean) => Promise<Prediction | null>;
   /** Detect mode: one spatial embedding, one head pass, then decoded boxes. */
   detectObjects: (source: Drawable, scoreThreshold?: number) => Promise<Detection[] | null>;
+  /**
+   * Detect mode: the current detector's guesses for one picture already in the
+   * project. Same head pass as detectObjects, but it reads the picture through
+   * the shared grid feature cache, so a picture the annotator or a training run
+   * has already seen costs no MobileNet pass at all.
+   *
+   * This never writes anything. What comes back is a suggestion the annotator
+   * draws; only an explicit acceptance turns one into a box in the manifest.
+   */
+  proposeBoxes: (imageId: string, scoreThreshold?: number) => Promise<Detection[] | null>;
 }
 
 // Non reactive side tables. Keeping tensors and typed arrays out of the store
@@ -2015,6 +2025,21 @@ export const useStore = create<State>((set, get) => {
       if (!manifest || manifest.mode !== "detect" || !detector) return null;
       const { pack } = await embedDetectFeatures(source);
       return detectSpatialMap(detector, pack, { scoreThreshold });
+    },
+
+    async proposeBoxes(imageId, scoreThreshold) {
+      const manifest = get().manifest;
+      if (!manifest || manifest.mode !== "detect" || !detector) return null;
+      const record = manifest.images.find((img) => img.id === imageId);
+      if (!record) return null;
+      const pack = await spatialFor(record);
+      // The detector may name a label that has been deleted since the run. A
+      // guess nobody can accept is worse than no guess, so it is dropped here
+      // rather than drawn and then refused by addBox.
+      const known = new Set(manifest.labels.map((label) => label.id));
+      return detectSpatialMap(detector, pack, { scoreThreshold }).filter((box) =>
+        known.has(box.labelId),
+      );
     },
 
     async predict(source, wantAttention = false) {

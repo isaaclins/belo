@@ -20,13 +20,18 @@ import {
   ArrowUUpLeft,
   ArrowUUpRight,
   BoundingBox,
+  Check,
+  CircleNotch,
   Cursor,
+  MagicWand,
   Plus,
   Trash,
   X,
 } from "@phosphor-icons/react";
 import { useStore } from "../lib/store";
-import { swatch } from "../components/ui";
+import { pct, swatch } from "../components/ui";
+import type { Detection } from "../lib/detect";
+import { useScoreThreshold } from "../lib/scoreThreshold";
 import { storage } from "../lib/storage";
 import {
   advance,
@@ -63,6 +68,42 @@ function percent(rect: BoxRect) {
   };
 }
 
+/**
+ * One guess from the trained detector, waiting to be kept or thrown away.
+ *
+ * A proposal is session state and nothing else. It carries an id so the list
+ * can be rendered and picked, but that id never reaches the manifest: accepting
+ * one calls addBox exactly the way a drawn rectangle does, and the box that
+ * comes back gets its own stored id.
+ */
+interface Proposal extends Detection {
+  id: string;
+}
+
+/** How far a press may travel and still count as a tap on a guess, in pixels. */
+const TAP_SLOP = 6;
+
+/** Ids for guesses. Session only, never written anywhere. */
+let guessSeq = 0;
+
+const HINT_KEY = "belo.detect.guessHint";
+
+function hintWasDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(HINT_KEY) === "done";
+  } catch {
+    return false;
+  }
+}
+
+function dismissHint(): void {
+  try {
+    window.localStorage.setItem(HINT_KEY, "done");
+  } catch {
+    // A webview with storage disabled shows the line again next time.
+  }
+}
+
 export function BoxAnnotator({
   images,
   index,
@@ -85,10 +126,19 @@ export function BoxAnnotator({
   const removeBox = useStore((s) => s.removeBox);
   const setBoxes = useStore((s) => s.setBoxes);
   const toast = useStore((s) => s.toast);
+  const proposeBoxes = useStore((s) => s.proposeBoxes);
+  const hasModel = useStore((s) => s.hasModel);
+  const modelStale = useStore((s) => s.stale);
+  // The moment the live detector was trained. A background retrain finishing
+  // moves it, which is what lets an open annotator pick up the better model.
+  const trainedAt = useStore((s) => s.manifest?.model?.trainedAt ?? null);
+  const threshold = useScoreThreshold();
 
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
+  /** Where a press on a guess started, so a tap can be told from a drag. */
+  const tapRef = useRef<{ id: string; x: number; y: number } | null>(null);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ boxId: string | null; rect: BoxRect } | null>(null);
@@ -96,6 +146,25 @@ export function BoxAnnotator({
   const [frame, setFrame] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   /** Armed pencil: every press draws, even on top of an existing box. */
   const [drawTool, setDrawTool] = useState(false);
+
+  // --- the detector's guesses -----------------------------------------------
+  //
+  // Proposals live exactly as long as one picture is on screen. Leaving the
+  // picture drops them without a word, which is the whole safety story: what
+  // was never accepted was never in the project.
+  const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const [thinking, setThinking] = useState(false);
+  /** True once the user has kept or thrown away a guess on this picture. */
+  const touchedRef = useRef(false);
+  /** The picture the user explicitly asked to be guessed at again. */
+  const askedRef = useRef<string | null>(null);
+  const [asks, setAsks] = useState(0);
+  const [hintOpen, setHintOpen] = useState(() => !hintWasDismissed());
+  const guesses = proposals ?? [];
+  // The key handler is registered once for the session, so it reads the current
+  // guesses through a ref rather than closing over a list from one render.
+  const proposalsRef = useRef<Proposal[]>(guesses);
+  proposalsRef.current = guesses;
 
   // Undo history, one stack per picture, held in a ref so a press does not
   // depend on a render having landed. It lives exactly as long as the annotator
@@ -115,7 +184,63 @@ export function BoxAnnotator({
     setSelected(null);
     setPreview(null);
     dragRef.current = null;
+    // Guesses belong to the picture they were made about. Leaving it throws
+    // away every one that was not accepted, silently: what was never accepted
+    // was never in the project.
+    setProposals(null);
+    setThinking(false);
+    touchedRef.current = false;
+    askedRef.current = null;
   }, [image?.id]);
+
+  // The record the guessing effect works on, kept in a ref because every edit
+  // to the project hands back a new object for the same picture and the effect
+  // must not restart for that.
+  const imageRef = useRef<ImageRecord | null>(image);
+  imageRef.current = image;
+  const imageId = image?.id ?? null;
+
+  /**
+   * Asks the trained detector what it thinks is in this picture.
+   *
+   * It runs after the picture is on screen rather than with it, and a press of
+   * the arrow keys cancels it, so a project of a hundred pictures never waits
+   * on inference to turn a page. The heavy half is the frozen extractor, and
+   * that is read through the store's shared grid cache, so the second look at
+   * a picture costs a head pass and nothing else.
+   */
+  useEffect(() => {
+    const record = imageRef.current;
+    if (!imageId || !record || !hasModel) return;
+    // Guesses are for an empty picture. Somebody who already drew here has said
+    // what is in it, and guessing over that would be noise; Suggest again is
+    // how they ask for it anyway.
+    const asked = askedRef.current === imageId;
+    if (!asked && boxesOf(record).length > 0) return;
+    // A fresh model may have landed mid review. Replacing the rectangles under
+    // a hand that is already deciding about them is worse than letting this
+    // picture finish with the guesses it started with.
+    if (touchedRef.current) return;
+
+    let cancelled = false;
+    setThinking(true);
+    void proposeBoxes(imageId, threshold)
+      .then((found) => {
+        if (cancelled) return;
+        setProposals((found ?? []).map((box) => ({ ...box, id: `guess${(guessSeq += 1)}` })));
+      })
+      .catch(() => {
+        // A detector that cannot answer is not an error worth a toast in the
+        // middle of annotating. The picture simply gets no guesses.
+        if (!cancelled) setProposals([]);
+      })
+      .finally(() => {
+        if (!cancelled) setThinking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [asks, hasModel, imageId, proposeBoxes, threshold, trainedAt]);
 
   // The frame is sized here rather than in CSS: an aspect ratio that has to fit
   // inside a box constrained on both axes is exactly the case where the pure
@@ -218,6 +343,9 @@ export function BoxAnnotator({
       setPreview({ boxId: next.boxId, rect: next.rect });
     };
     const onUp = (event: PointerEvent) => {
+      // Whatever the press was about, it is over. A tap that came up somewhere
+      // other than the guess it started on is simply not an acceptance.
+      tapRef.current = null;
       const drag = dragRef.current;
       if (!drag) return;
       dragRef.current = null;
@@ -247,13 +375,70 @@ export function BoxAnnotator({
     [images.length, index, onIndex],
   );
 
+  /**
+   * Keeps some guesses. They go in through addBox, the same call a dragged
+   * rectangle makes, so the manifest cannot tell the difference: undo covers
+   * it, the project is marked changed, and the debounced background retrain
+   * counts the new boxes like any others.
+   *
+   * One undo step covers the whole batch, so keeping five guesses is undone by
+   * one press rather than five.
+   */
+  const acceptProposals = useCallback(
+    (chosen: Proposal[]) => {
+      if (!image || chosen.length === 0) return;
+      remember();
+      let last: string | null = null;
+      for (const guess of chosen) {
+        const id = addBox(image.id, guess.labelId, {
+          x: guess.x,
+          y: guess.y,
+          w: guess.w,
+          h: guess.h,
+        });
+        if (id) last = id;
+      }
+      touchedRef.current = true;
+      const kept = new Set(chosen.map((guess) => guess.id));
+      setProposals((current) => (current ?? []).filter((guess) => !kept.has(guess.id)));
+      // One kept guess is now a normal box, ready to be nudged. A whole batch
+      // has no single box worth picking.
+      setSelected(chosen.length === 1 ? last : null);
+    },
+    [addBox, image, remember],
+  );
+
+  const dismissProposal = useCallback((id: string) => {
+    touchedRef.current = true;
+    setProposals((current) => (current ?? []).filter((guess) => guess.id !== id));
+    setSelected((picked) => (picked === id ? null : picked));
+  }, []);
+
+  const acceptAll = useCallback(() => {
+    acceptProposals(proposalsRef.current);
+  }, [acceptProposals]);
+
+  /** Asks for guesses on a picture that already has boxes, or had none to show. */
+  const suggestAgain = useCallback(() => {
+    if (!imageId) return;
+    askedRef.current = imageId;
+    touchedRef.current = false;
+    setAsks((count) => count + 1);
+  }, [imageId]);
+
   const dropSelected = useCallback(() => {
     if (!image || !selected) return;
+    // Delete means "not that one" whether the rectangle is a stored box or a
+    // guess. A guess is only forgotten; nothing is written either way.
+    if ((proposals ?? []).some((guess) => guess.id === selected)) {
+      dismissProposal(selected);
+      return;
+    }
     if (!boxesOf(image).some((box) => box.id === selected)) return;
     remember();
     removeBox(image.id, selected);
     setSelected(null);
-  }, [image, remember, removeBox, selected]);
+  }, [dismissProposal, image, proposals, remember, removeBox, selected]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -285,6 +470,20 @@ export function BoxAnnotator({
         dropSelected();
         return;
       }
+      // The confirm streak: enter keeps what Belo drew, space keeps it and
+      // turns the page. Neither does anything when there is nothing to keep,
+      // so a picture without guesses still behaves as it always did.
+      if (event.key === "Enter" || event.key === " ") {
+        // Both keys already mean "press this" when a button has the focus, and
+        // stealing them there would fire two different things at once.
+        if (target && target.tagName === "BUTTON") return;
+        const waiting = proposalsRef.current;
+        if (waiting.length === 0) return;
+        event.preventDefault();
+        acceptProposals(waiting);
+        if (event.key === " ") step(1);
+        return;
+      }
       if (event.key >= "1" && event.key <= "9") {
         const label = labels[Number(event.key) - 1];
         if (label) {
@@ -295,20 +494,44 @@ export function BoxAnnotator({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dropSelected, labels, onClose, selected, setActiveLabel, step, walk]);
+  }, [acceptProposals, dropSelected, labels, onClose, selected, setActiveLabel, step, walk]);
 
   const startDraw = (event: React.PointerEvent) => {
     if (event.button !== 0) return;
     if (!activeLabelId) {
-      toast("Pick a label first, that is the color you draw with", "bad");
+      // A press that landed on a guess is a decision about that guess and not
+      // an attempt to draw, so it does not deserve the nudge.
+      if (!tapRef.current) toast("Pick a label first, that is the color you draw with", "bad");
       return;
     }
     event.preventDefault();
     const grab = pointAt(event);
     const rect = { x: grab.x, y: grab.y, w: 0, h: 0 };
     dragRef.current = { kind: "draw", boxId: null, handle: null, origin: rect, grab, rect };
-    setSelected(null);
+    // A press on a guess has already picked it on the way up the tree, and
+    // clearing the selection here would undo that.
+    if (!tapRef.current) setSelected(null);
     setPreview({ boxId: null, rect });
+  };
+
+  /**
+   * A guess is kept by a tap on it, and a tap is a press that did not travel.
+   * Nothing here stops the press from reaching the picture underneath, so the
+   * same gesture that would draw a rectangle across a guess still draws it: a
+   * real drag ends as a drawn box and never as an accepted guess.
+   */
+  const startTap = (event: React.PointerEvent, id: string) => {
+    if (event.button !== 0) return;
+    tapRef.current = { id, x: event.clientX, y: event.clientY };
+    setSelected(id);
+  };
+
+  const endTap = (event: React.PointerEvent, guess: Proposal) => {
+    const tap = tapRef.current;
+    tapRef.current = null;
+    if (!tap || tap.id !== guess.id) return;
+    if (Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > TAP_SLOP) return;
+    acceptProposals([guess]);
   };
 
   const startMove = (event: React.PointerEvent, boxId: string, rect: BoxRect) => {
@@ -401,6 +624,11 @@ export function BoxAnnotator({
         <span className="badge badge--idle">
           {boxes.length} box{boxes.length === 1 ? "" : "es"}
         </span>
+        {guesses.length > 0 ? (
+          <span className="badge badge--guess" data-guess-count={guesses.length}>
+            {guesses.length} guess{guesses.length === 1 ? "" : "es"}
+          </span>
+        ) : null}
         <div className="spacer" />
         <button className="btn btn--sm" onClick={onClose} aria-label="Close the annotator">
           <X size={15} weight="bold" /> Done
@@ -470,6 +698,45 @@ export function BoxAnnotator({
               );
             })}
 
+            {guesses.map((guess) => {
+              const label = labelById.get(guess.labelId) ?? null;
+              const color = swatch(label?.color ?? 0);
+              const on = selected === guess.id;
+              return (
+                <div
+                  key={guess.id}
+                  className={`aprop${on ? " aprop--on" : ""}`}
+                  data-guess-label={guess.labelId}
+                  data-guess-rect={`${guess.x.toFixed(4)},${guess.y.toFixed(4)},${guess.w.toFixed(4)},${guess.h.toFixed(4)}`}
+                  style={{ ...percent(guess), borderColor: color }}
+                  onPointerDown={(event) => startTap(event, guess.id)}
+                  onPointerUp={(event) => endTap(event, guess)}
+                >
+                  <span className="aprop__tag" style={{ color }}>
+                    {label?.name ?? "removed label"} <span className="mono">{pct(guess.score)}</span>
+                  </span>
+                  <button
+                    className="aprop__drop"
+                    title="Throw this guess away"
+                    aria-label={`Throw away the guess ${label?.name ?? ""}`}
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      event.preventDefault();
+                    }}
+                    onPointerUp={(event) => {
+                      event.stopPropagation();
+                      dismissProposal(guess.id);
+                    }}
+                    // Pointer and click both, so the keyboard reaches it too.
+                    // Throwing the same guess away twice is already a no-op.
+                    onClick={() => dismissProposal(guess.id)}
+                  >
+                    <X size={11} weight="bold" />
+                  </button>
+                </div>
+              );
+            })}
+
             {drawing ? (
               <div
                 className={`abox abox--draft${tooSmall ? " abox--tiny" : ""}`}
@@ -480,6 +747,22 @@ export function BoxAnnotator({
               />
             ) : null}
           </div>
+
+          {hintOpen && guesses.length > 0 ? (
+            <p className="anno__firsthint">
+              Belo has started guessing. Click a guess to keep it, or draw over it.
+              <button
+                className="anno__firsthint-x"
+                aria-label="Hide this hint"
+                onClick={() => {
+                  setHintOpen(false);
+                  dismissHint();
+                }}
+              >
+                <X size={13} weight="bold" />
+              </button>
+            </p>
+          ) : null}
         </div>
 
         <aside className="anno__side">
@@ -513,6 +796,56 @@ export function BoxAnnotator({
               <Plus size={15} weight="bold" /> New label
             </button>
           </div>
+
+          {hasModel ? (
+            <div className="anno__block" data-guesses={guesses.length}>
+              <span className="eyebrow">Belo's guesses</span>
+              {thinking ? (
+                <p className="field__hint anno__thinking" data-thinking="1">
+                  <CircleNotch size={13} weight="bold" /> Looking at this picture
+                </p>
+              ) : null}
+              {guesses.length > 0 ? (
+                <>
+                  <button
+                    className="btn btn--sm btn--primary btn--block"
+                    data-accept-all="1"
+                    onClick={acceptAll}
+                  >
+                    <Check size={15} weight="bold" /> Keep all {guesses.length}
+                  </button>
+                  <p className="field__hint">
+                    Click a guess to keep it, or press its x to throw it away. Nothing is saved
+                    until you keep it.
+                  </p>
+                  {modelStale ? (
+                    <p className="field__hint" data-guess-stale="1">
+                      These are guesses from an older training run. Belo is still learning from
+                      your newest boxes.
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <p className="field__hint">
+                    {thinking
+                      ? "One moment."
+                      : boxes.length > 0
+                        ? "This picture already has your boxes on it, so Belo left it alone."
+                        : "Belo had nothing to suggest here. Draw the boxes yourself."}
+                  </p>
+                  <button
+                    className="btn btn--sm btn--block"
+                    data-suggest-again="1"
+                    disabled={thinking}
+                    onClick={suggestAgain}
+                  >
+                    <MagicWand size={15} weight="bold" /> Suggest again
+                  </button>
+                </>
+              )}
+            </div>
+          ) : null}
 
           <div className="anno__block">
             <span className="eyebrow">Tool</span>
@@ -553,6 +886,7 @@ export function BoxAnnotator({
             <p className="field__hint mono anno__keys">
               arrows: other pictures · 1 to 9: label · delete: remove box · cmd z: undo · esc:
               close
+              {hasModel ? " · enter: keep every guess · space: keep them and go on" : ""}
             </p>
           </div>
         </aside>
