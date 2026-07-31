@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "packageManager": "npm@11.11.0",
   "description": "Local image classifier trainer",
   "scripts": {
@@ -23,6 +23,7 @@
     "check:overlay": "node scripts/check-overlay.mjs",
     "check:propose": "node scripts/check-propose.mjs",
     "check:camera-live": "node scripts/check-camera-live.mjs",
+    "check:screen": "node scripts/check-screen.mjs",
     "check:export": "node scripts/check-export.mjs"
   },
   "repository": {

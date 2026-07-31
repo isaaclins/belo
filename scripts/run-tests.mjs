@@ -20,6 +20,7 @@ const STEPS = [
   ["check:curve", "a loss curve is read into the right epoch and the right words"],
   ["check:camera", "the camera seam behaves without a camera"],
   ["check:camera-live", "a real camera session switches devices and survives a removal"],
+  ["check:screen", "the screen source runs the whole live path on a synthetic desktop"],
   ["check:overlay", "the multi label attention overlay paints what the model saw"],
   ["check:propose", "the annotator's guesses are only guesses until they are kept"],
   ["check:export", "an exported model runs outside Belo and agrees with it"],
