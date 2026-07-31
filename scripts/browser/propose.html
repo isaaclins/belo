@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Belo assisted labeling check</title>
+    <style>
+      /* The annotator sizes its frame from the stage it is given, so the mount
+         needs real dimensions the way the app's own layout provides them. */
+      html,
+      body,
+      #root {
+        margin: 0;
+        width: 1200px;
+        height: 820px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./propose.tsx"></script>
+  </body>
+</html>
