@@ -17,22 +17,23 @@ import type { Detection } from "../lib/detect";
 import { isImageFile, loadImageElement, toSquareCanvas } from "../lib/images";
 import { storage } from "../lib/storage";
 import { useStore } from "../lib/store";
+import {
+  setScoreThreshold,
+  THRESHOLDS,
+  useScoreThreshold,
+  type ScoreThreshold,
+} from "../lib/scoreThreshold";
 import { useWebcam } from "../lib/useWebcam";
 
 const TICK_MS = 220;
-const THRESHOLDS = [0.2, 0.3, 0.5, 0.7] as const;
-const THRESHOLD_KEY = "belo.detect.scoreThreshold";
 
-function readThreshold(): number {
-  try {
-    const value = Number(window.localStorage.getItem(THRESHOLD_KEY));
-    return THRESHOLDS.find((threshold) => threshold === value) ?? 0.3;
-  } catch {
-    return 0.3;
-  }
-}
-
-function ThresholdPicker({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+function ThresholdPicker({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: ScoreThreshold) => void;
+}) {
   return (
     <fieldset className="threshold" aria-label="Detection score threshold">
       <legend>Score</legend>
@@ -85,7 +86,8 @@ export function DetectUseView() {
   const detectObjects = useStore((state) => state.detectObjects);
   const addFromDrawable = useStore((state) => state.addFromDrawable);
 
-  const [threshold, setThreshold] = useState(readThreshold);
+  // Shared with the box annotator's guesses, so one cutoff governs the app.
+  const threshold = useScoreThreshold();
   const [live, setLive] = useState(false);
   const { videoRef, status, error, cameras, deviceId, selectCamera, switching, retry } =
     useWebcam(live);
@@ -100,14 +102,7 @@ export function DetectUseView() {
   const [thinking, setThinking] = useState(false);
   const stillRef = useRef<HTMLImageElement | null>(null);
 
-  const chooseThreshold = (value: number) => {
-    setThreshold(value);
-    try {
-      window.localStorage.setItem(THRESHOLD_KEY, String(value));
-    } catch {
-      // A restricted webview still keeps the choice for this mounted session.
-    }
-  };
+
 
   useEffect(() => {
     if (!live || status !== "live" || !hasModel) {
@@ -256,7 +251,7 @@ export function DetectUseView() {
             <VideoCamera size={16} weight="bold" /> Live detection
           </h3>
           <div className="card__tools">
-            <ThresholdPicker value={threshold} onChange={chooseThreshold} />
+            <ThresholdPicker value={threshold} onChange={setScoreThreshold} />
             {live ? (
               <CameraPicker cameras={cameras} deviceId={deviceId} onPick={selectCamera} compact />
             ) : null}
