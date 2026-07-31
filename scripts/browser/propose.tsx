@@ -263,13 +263,27 @@ async function main() {
 
   // --- 1. an unboxed picture gets guesses --------------------------------------
 
+  // The picture goes up first and the guessing follows it, so the thinking hint
+  // exists only for as long as the head pass takes. How long that is depends
+  // entirely on the machine, so it is watched for rather than sampled: a poll
+  // that happens to land after the guesses is not evidence of anything.
+  let thinking = false;
+  const watcher = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node.matches("[data-thinking]") || node.querySelector("[data-thinking]")) {
+          thinking = true;
+        }
+      }
+    }
+  });
+  watcher.observe(document.body, { childList: true, subtree: true });
   goTo(TRAIN_IMAGES);
-  // One frame in, the picture is up and the guessing has been started but
-  // cannot have landed: the quiet hint is what stands in for it meanwhile.
   await tick();
-  const thinking = document.querySelector("[data-thinking]") !== null;
   const shownFirst = document.querySelector(".anno__img") !== null;
   await until("the first guesses", () => guessNodes().length > 0);
+  watcher.disconnect();
   const first = guessNodes();
   const dashed = first.every((node) => getComputedStyle(node).borderTopStyle === "dashed");
   check(
