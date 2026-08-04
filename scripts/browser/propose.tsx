@@ -455,9 +455,19 @@ async function main() {
     return button && !button.disabled ? button : null;
   });
   suggestAgain.click();
+  let lastSuggestionRequest = Date.now();
   const askedFor = await until("the guesses asked for explicitly", () => {
     const nodes = guessNodes();
-    return nodes.length > 0 ? nodes.length : null;
+    if (nodes.length > 0) return nodes.length;
+    // A background detector run can briefly own the ML gate. The annotator
+    // drops that inference rather than queueing it, so retry once the button
+    // is enabled instead of turning a transient drop into a flaky timeout.
+    const button = document.querySelector<HTMLButtonElement>("[data-suggest-again]");
+    if (button && !button.disabled && Date.now() - lastSuggestionRequest >= 500) {
+      lastSuggestionRequest = Date.now();
+      button.click();
+    }
+    return null;
   });
   check(
     "Suggest again offers guesses on a boxed picture and replaces nothing",
