@@ -10,6 +10,8 @@ import { UseView } from "./views/UseView";
 import { DetectTrainView } from "./views/DetectTrainView";
 import { DetectUseView } from "./views/DetectUseView";
 import { isSelectAllShortcut, isTextEditingTarget } from "./lib/keyboard";
+import { isHudWindow } from "./lib/hud";
+import { HudView } from "./views/HudView";
 import {
   closeScreenSnip,
   openScreenSnip,
@@ -127,7 +129,7 @@ function ProjectName() {
   );
 }
 
-export default function App() {
+function MainApp() {
   const booted = useStore((s) => s.booted);
   const boot = useStore((s) => s.boot);
   const manifest = useStore((s) => s.manifest);
@@ -323,4 +325,8 @@ export default function App() {
       <Toasts />
     </div>
   );
+}
+
+export default function App() {
+  return isHudWindow() ? <HudView /> : <MainApp />;
 }

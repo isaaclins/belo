@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { camera, type CameraFacing, type CameraInfo } from "./capture";
-import { screen } from "./screen";
+import { screen, type ScreenStartOptions } from "./screen";
 
 export type CameraStatus = "off" | "starting" | "live" | "error";
 export type { CameraInfo };
@@ -45,11 +45,12 @@ function writePreferred(kind: FeedKind, id: string | null) {
  * only place that knows about the difference.
  */
 interface FeedAdapter {
-  start(id: string | null): Promise<MediaStream>;
+  start(id: string | null, options?: ScreenStartOptions): Promise<MediaStream>;
   stop(stream: MediaStream | null): void;
   list(): Promise<FeedOption[]>;
   activeId(stream: MediaStream | null): string | null;
   onChanged(handler: () => void): () => void;
+  reportInference(stream: MediaStream | null, milliseconds: number): void;
   /** Plain language for a failure, in the words of this feed. */
   describe(err: unknown): string;
 }
@@ -65,6 +66,7 @@ const cameraAdapter: FeedAdapter = {
     })),
   activeId: (stream) => camera.activeDeviceId(stream),
   onChanged: (handler) => camera.onDevicesChanged(handler),
+  reportInference: () => undefined,
   describe(err) {
     if (err instanceof Error && err.name === "NotAllowedError") {
       return "Camera access was denied. Allow it in your system privacy settings and try again.";
@@ -77,19 +79,20 @@ const cameraAdapter: FeedAdapter = {
 };
 
 const screenAdapter: FeedAdapter = {
-  start: (id) => screen.start(id),
+  start: (id, options) => screen.start(id, options),
   stop: (stream) => screen.stop(stream),
   list: async () =>
     screen.canList()
       ? (await screen.list()).map((entry) => ({
           id: entry.id,
-          label: `${entry.label} (${entry.width} by ${entry.height})`,
+          label: `${entry.label} (${entry.width} by ${entry.height}, ${entry.refreshRate} fps)`,
         }))
       : [],
   activeId: (stream) => screen.activeDisplayId(stream),
   // Displays do not come and go the way USB cameras do, and no platform here
   // offers a change event for them, so the list is read at every start.
   onChanged: () => () => undefined,
+  reportInference: (stream, milliseconds) => screen.reportInference(stream, milliseconds),
   describe(err) {
     if (err instanceof Error && err.name === "NotAllowedError") {
       return "Belo is not allowed to record the screen yet.";
@@ -114,7 +117,11 @@ const ADAPTERS: Record<FeedKind, FeedAdapter> = { camera: cameraAdapter, screen:
  * devicechange. Each feed remembers its own pick, which is why switching to the
  * screen and back returns to the camera that was running.
  */
-export function useLiveSource(active: boolean, kind: FeedKind = "camera") {
+export function useLiveSource(
+  active: boolean,
+  kind: FeedKind = "camera",
+  screenOptions?: ScreenStartOptions,
+) {
   const adapter = ADAPTERS[kind];
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -176,7 +183,7 @@ export function useLiveSource(active: boolean, kind: FeedKind = "camera") {
         // second camera while the first one still holds the capture session,
         // and a screen capture left running keeps its indicator lit.
         stop();
-        const stream = await adapter.start(wantedId);
+        const stream = await adapter.start(wantedId, kind === "screen" ? screenOptions : undefined);
         if (cancelled) {
           adapter.stop(stream);
           return;
@@ -207,7 +214,7 @@ export function useLiveSource(active: boolean, kind: FeedKind = "camera") {
       cancelled = true;
       stop();
     };
-  }, [active, adapter, kind, wantedId, attempt, stop]);
+  }, [active, adapter, kind, screenOptions, wantedId, attempt, stop]);
 
   // Hot plug: a USB camera arriving or leaving refreshes the list, and losing
   // the camera in use drops the request back to the platform default.
@@ -248,6 +255,10 @@ export function useLiveSource(active: boolean, kind: FeedKind = "camera") {
   );
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  const reportInference = useCallback(
+    (milliseconds: number) => adapter.reportInference(streamRef.current, milliseconds),
+    [adapter],
+  );
 
   return {
     videoRef,
@@ -261,6 +272,7 @@ export function useLiveSource(active: boolean, kind: FeedKind = "camera") {
     select,
     switching,
     retry,
+    reportInference,
   };
 }
 

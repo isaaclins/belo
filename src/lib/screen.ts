@@ -20,6 +20,13 @@
 // the Screen button rather than offering something that cannot work.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import {
+  AdaptiveRateController,
+  DEFAULT_INFERENCE_INTERVAL_MS,
+  type PipelineTiming,
+} from "./adaptiveRate";
+import { decodeScreenFrame } from "./screenPacket";
+export { decodeScreenFrame } from "./screenPacket";
 
 export interface ScreenInfo {
   /** Opaque, and stringified so a display id and a deviceId look alike. */
@@ -27,9 +34,29 @@ export interface ScreenInfo {
   label: string;
   width: number;
   height: number;
+  /** The current display mode, rounded to a usable frame rate. */
+  refreshRate: number;
 }
 
 export type ScreenPermission = "granted" | "denied" | "unsupported";
+
+export interface ScreenMetrics extends PipelineTiming {
+  fps: number;
+  totalMs: number;
+  budgetMs: number;
+  decision: "hold" | "slow" | "fast" | "drop";
+}
+
+export interface ScreenStartOptions {
+  /** Zero means Auto: start at the display's actual refresh rate. */
+  requestedFps?: number;
+  /** The long edge of the native frame. */
+  maxEdge?: number;
+  /** JPEG quality, 1 to 100. */
+  jpegQuality?: number;
+  /** Receives timing only, never pixels. */
+  onMetrics?: (metrics: ScreenMetrics) => void;
+}
 
 export interface ScreenSource {
   /** Cheap and synchronous: whether this build has any screen path at all. */
@@ -45,13 +72,20 @@ export interface ScreenSource {
   permission(): Promise<ScreenPermission>;
   /** Opens the platform's privacy settings. Silently does nothing where there are none. */
   openSettings(): Promise<void>;
-  start(displayId?: string | null): Promise<MediaStream>;
+  start(displayId?: string | null, options?: ScreenStartOptions): Promise<MediaStream>;
   stop(stream: MediaStream | null): void;
   activeDisplayId(stream: MediaStream | null): string | null;
+  /** Adds the latest inference cost to the adaptive controller. */
+  reportInference(stream: MediaStream | null, milliseconds: number): void;
+  /** Rebuilds the native filter after Belo creates or shows another window. */
+  refreshFilter(): Promise<void>;
 }
 
-/** What the app asks the platform for. Live inference samples every 220 ms. */
-export const SCREEN_FPS = 10;
+/** Fallback for browser screen sharing when the display mode is not enumerable. */
+export const SCREEN_FPS = 60;
+const DEFAULT_MAX_EDGE = 1120;
+const DEFAULT_JPEG_QUALITY = 55;
+
 /** A frame that never arrives is a hang, so waiting for the first one has an end. */
 const FIRST_FRAME_TIMEOUT_MS = 6000;
 
@@ -74,8 +108,12 @@ export interface ScreenPipe {
   list(): Promise<ScreenInfo[]>;
   permission(): Promise<ScreenPermission>;
   openSettings(): Promise<void>;
-  /** Opens the feed. Every frame is a JPEG. */
-  open(displayId: string | null, onFrame: (jpeg: ArrayBuffer) => void): Promise<OpenFeed>;
+  /** Opens the feed. Every frame is a JPEG or a native timing packet. */
+  open(
+    displayId: string | null,
+    onFrame: (packet: ArrayBuffer) => void,
+    options?: ScreenStartOptions,
+  ): Promise<OpenFeed>;
 }
 
 export interface OpenFeed {
@@ -83,11 +121,23 @@ export interface OpenFeed {
   id: string;
   width: number;
   height: number;
+  /** Actual display mode rate, or the platform fallback. */
+  refreshRate?: number;
+  /** Rate the native stream is currently asking for. */
+  fps?: number;
   close(): void | Promise<void>;
+  setRate?(fps: number): void | Promise<void>;
 }
 
-/** Teardown for a running piped stream, kept off the MediaStream itself. */
-const pipedFeeds = new WeakMap<MediaStream, { id: string; close: () => void }>();
+interface PipedFeed {
+  id: string;
+  close: () => void;
+  reportInference: (milliseconds: number) => void;
+}
+
+/** Teardown and feedback for a running piped stream, kept off the MediaStream itself. */
+const pipedFeeds = new WeakMap<MediaStream, PipedFeed>();
+
 
 export function createPipedScreenSource(pipe: ScreenPipe): ScreenSource {
   return {
@@ -97,8 +147,9 @@ export function createPipedScreenSource(pipe: ScreenPipe): ScreenSource {
     list: () => pipe.list(),
     permission: () => pipe.permission(),
     openSettings: () => pipe.openSettings(),
+    refreshFilter: async () => undefined,
 
-    async start(displayId) {
+    async start(displayId, options = {}) {
       if (await pipe.permission().then((state) => state === "denied")) {
         throw denied("Belo is not allowed to record the screen");
       }
@@ -109,15 +160,28 @@ export function createPipedScreenSource(pipe: ScreenPipe): ScreenSource {
       let closed = false;
       let painting = false;
       let painted = 0;
+      let dropped = 0;
       let announce: (() => void) | null = null;
+      let inferenceMs = 0;
+      let controller: AdaptiveRateController | null = null;
+      let feed: OpenFeed | null = null;
+      let lastRequestedRate = 0;
 
-      // Frames are dropped rather than queued while a decode is in flight. A
-      // late frame of a screen is worth nothing: the next one is already truer.
-      const paint = async (jpeg: ArrayBuffer) => {
-        if (closed || painting) return;
+      const paint = async (packet: ArrayBuffer) => {
+        if (closed || painting) {
+          dropped += 1;
+          return;
+        }
         painting = true;
+        const decoded = decodeScreenFrame(packet);
+        const transferMs =
+          decoded.sentAtMs === null ? 0 : Math.max(0, Date.now() - decoded.sentAtMs);
+        const decodeStarted = performance.now();
         try {
-          const bitmap = await createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }));
+          const bitmap = await createImageBitmap(
+            new Blob([decoded.jpeg], { type: "image/jpeg" }),
+          );
+          const decodeMs = performance.now() - decodeStarted;
           if (closed) {
             bitmap.close();
             return;
@@ -126,25 +190,68 @@ export function createPipedScreenSource(pipe: ScreenPipe): ScreenSource {
             canvas.width = bitmap.width;
             canvas.height = bitmap.height;
           }
+          const paintStarted = performance.now();
           context.drawImage(bitmap, 0, 0);
+          const paintMs = performance.now() - paintStarted;
           bitmap.close();
           painted += 1;
+
+          const timing: PipelineTiming = {
+            nativeMs: decoded.nativeMs,
+            transferMs,
+            decodeMs,
+            paintMs,
+            inferenceMs,
+            dropped: dropped > 0,
+          };
+          dropped = 0;
+          const decision = controller?.observe(timing);
+          if (decision && decision.changed && decision.rate !== lastRequestedRate) {
+            lastRequestedRate = decision.rate;
+            void Promise.resolve(feed?.setRate?.(decision.rate)).catch(() => undefined);
+          }
+          if (decision) {
+            options.onMetrics?.({
+              ...timing,
+              fps: decision.rate,
+              totalMs: decision.totalMs,
+              budgetMs: decision.budgetMs,
+              decision: decision.reason,
+            });
+          }
           announce?.();
         } finally {
           painting = false;
         }
       };
 
-      const feed = await pipe.open(displayId ?? null, (jpeg) => void paint(jpeg));
+      feed = await pipe.open(displayId ?? null, (packet) => void paint(packet), options);
+      const refreshRate = Math.max(1, Math.round(feed.refreshRate ?? feed.fps ?? SCREEN_FPS));
+      const requested = options.requestedFps ?? 0;
+      const maxRate = requested > 0 ? Math.min(refreshRate, requested) : refreshRate;
+      const initialRate = Math.min(maxRate, Math.max(1, Math.round(feed.fps ?? maxRate)));
+      controller = new AdaptiveRateController({
+        maxRate,
+        initialRate,
+        inferenceIntervalMs: DEFAULT_INFERENCE_INTERVAL_MS,
+      });
+      lastRequestedRate = initialRate;
       canvas.width = feed.width;
       canvas.height = feed.height;
-      const stream = canvas.captureStream(SCREEN_FPS);
+      const stream = canvas.captureStream(Math.max(60, refreshRate));
       const close = () => {
         if (closed) return;
         closed = true;
-        void feed.close();
+        void feed?.close();
       };
-      pipedFeeds.set(stream, { id: feed.id, close });
+      pipedFeeds.set(stream, {
+        id: feed.id,
+        close,
+        reportInference(milliseconds) {
+          const next = Math.max(0, milliseconds);
+          inferenceMs = inferenceMs === 0 ? next : inferenceMs * 0.75 + next * 0.25;
+        },
+      });
 
       try {
         // A stream whose first frame never lands would show an empty stage with
@@ -179,6 +286,11 @@ export function createPipedScreenSource(pipe: ScreenPipe): ScreenSource {
     activeDisplayId(stream) {
       return stream ? (pipedFeeds.get(stream)?.id ?? null) : null;
     },
+
+    reportInference(stream, milliseconds) {
+      if (!stream) return;
+      pipedFeeds.get(stream)?.reportInference(milliseconds);
+    },
   };
 }
 
@@ -193,17 +305,28 @@ const nativePipe: ScreenPipe = {
   openSettings: async () => {
     await invoke("screen_open_settings");
   },
-  async open(displayId, onFrame) {
+  async open(displayId, onFrame, options = {}) {
     const channel = new Channel<ArrayBuffer>();
     channel.onmessage = onFrame;
-    const info = await invoke<{ id: string; width: number; height: number }>("screen_start", {
+    const info = await invoke<{
+      id: string;
+      width: number;
+      height: number;
+      refreshRate: number;
+      fps: number;
+    }>("screen_start", {
       displayId,
-      fps: SCREEN_FPS,
+      // Zero is the native Auto value. Explicit presets stay below the display
+      // mode and the controller can still step them down when needed.
+      fps: options.requestedFps ?? 0,
+      maxEdge: options.maxEdge ?? DEFAULT_MAX_EDGE,
+      jpegQuality: options.jpegQuality ?? DEFAULT_JPEG_QUALITY,
       onFrame: channel,
     });
     return {
       ...info,
       close: () => invoke("screen_stop"),
+      setRate: (fps: number) => invoke("screen_set_rate", { fps }),
     };
   },
 };
@@ -220,9 +343,9 @@ const webScreen: ScreenSource = {
   list: async () => [],
   permission: async () => "granted",
   openSettings: async () => undefined,
-  async start() {
+  async start(_displayId, options = {}) {
     return navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: SCREEN_FPS } },
+      video: { frameRate: { ideal: options.requestedFps || SCREEN_FPS } },
       audio: false,
     });
   },
@@ -232,6 +355,8 @@ const webScreen: ScreenSource = {
   activeDisplayId(stream) {
     return stream?.getVideoTracks()[0]?.getSettings?.().deviceId ?? null;
   },
+  reportInference: () => undefined,
+  refreshFilter: async () => undefined,
 };
 
 const unsupported: ScreenSource = {
@@ -246,6 +371,8 @@ const unsupported: ScreenSource = {
   },
   stop: () => undefined,
   activeDisplayId: () => null,
+  reportInference: () => undefined,
+  refreshFilter: async () => undefined,
 };
 
 const IS_MAC =
@@ -254,7 +381,12 @@ const IS_MAC =
   !(navigator.maxTouchPoints > 1);
 
 function platformSource(): ScreenSource {
-  const native = createPipedScreenSource(nativePipe);
+  const native = {
+    ...createPipedScreenSource(nativePipe),
+    refreshFilter: async () => {
+      await invoke("screen_refresh_filter");
+    },
+  } satisfies ScreenSource;
   if (IS_MAC && native.isSupported()) return native;
   if (webScreen.isSupported()) return webScreen;
   return unsupported;
@@ -284,7 +416,9 @@ export const screen: ScreenSource = {
   list: () => current().list(),
   permission: () => current().permission(),
   openSettings: () => current().openSettings(),
-  start: (displayId) => current().start(displayId),
+  start: (displayId, options) => current().start(displayId, options),
   stop: (stream) => current().stop(stream),
   activeDisplayId: (stream) => current().activeDisplayId(stream),
+  reportInference: (stream, milliseconds) => current().reportInference(stream, milliseconds),
+  refreshFilter: () => current().refreshFilter(),
 };

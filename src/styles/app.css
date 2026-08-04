@@ -1043,6 +1043,184 @@
   }
 }
 
+/* ---------- Capture HUD ---------- */
+.hud {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-height: 100%;
+  padding: var(--s3);
+  background: var(--paper);
+  color: var(--ink);
+  border: var(--border-w) solid var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.hud--waiting {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.hud__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 28px;
+  padding: 5px 7px;
+  background: var(--ink);
+  color: var(--paper);
+  border: var(--border-w-thin) solid var(--ink);
+  cursor: move;
+  user-select: none;
+}
+
+.hud__brand {
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hud__bar .eyebrow,
+.hud__fps {
+  color: var(--paper);
+}
+
+.hud__icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  color: var(--paper);
+  border: 2px solid var(--paper);
+  cursor: pointer;
+}
+
+.hud__icon:hover,
+.hud__icon:focus-visible {
+  background: var(--accent);
+  color: var(--ink);
+}
+
+.hud__frame {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  background: var(--ink);
+  border: var(--border-w) solid var(--ink);
+  cursor: crosshair;
+}
+
+.hud__frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
+.hud__draft {
+  position: absolute;
+  pointer-events: none;
+  border: 3px dashed var(--accent);
+}
+
+.hud__verdict {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--s2);
+  align-items: center;
+  padding: var(--s2) var(--s3);
+  background: var(--accent);
+  border: var(--border-w) solid var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.hud__verdict .eyebrow {
+  grid-column: 1 / -1;
+}
+
+.hud__verdict strong {
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 18px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hud__verdict--frozen {
+  background: var(--accent-2);
+  color: #fff;
+}
+
+.hud__confidence {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.hud__saving {
+  grid-column: 1 / -1;
+  color: var(--ink);
+}
+
+.hud__teach {
+  display: grid;
+  gap: var(--s2);
+}
+
+.hud__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hud__label {
+  padding: 6px 8px;
+  background: var(--panel);
+  color: var(--ink);
+  border: var(--border-w-thin) solid var(--ink);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-display);
+  font-size: 10px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.hud__label:hover,
+.hud__label:focus-visible {
+  background: var(--paper-deep);
+  transform: translate(-1px, -1px);
+}
+
+.hud__label--on {
+  font-weight: 800;
+}
+
+.hud__teachgo {
+  justify-self: start;
+}
+
+.hud__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: auto;
+}
+
+.hud__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
 /* ---------- Use ---------- */
 .use {
   display: grid;
@@ -1081,6 +1259,15 @@
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.use__frozen {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /* Sits exactly over the video box. The square the model saw is worked out in

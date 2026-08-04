@@ -110,6 +110,8 @@ const commands: Record<string, (args: Args) => unknown> = {
   // shortcut. The dedicated snip harness injects its own runtime seam.
   snip_supported: () => false,
   snip_region: () => null,
+  screen_set_rate: () => 60,
+  screen_refresh_filter: () => undefined,
 };
 
 /** Where the fake save dialog says the next export should go. */

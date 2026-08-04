@@ -31,6 +31,7 @@ import {
 } from "../../src/lib/screen";
 import { useStore } from "../../src/lib/store";
 import { useLiveSource, type FeedKind } from "../../src/lib/useWebcam";
+import { screenQuality, setScreenQuality } from "../../src/lib/screenQuality";
 import { installTauriShim, reporter } from "./tauri-shim";
 
 installTauriShim();
@@ -116,8 +117,8 @@ function toJpeg(canvas: HTMLCanvasElement): Promise<ArrayBuffer> {
 }
 
 const displays: ScreenInfo[] = [
-  { id: "display-1", label: "Display 1", width: WIDE, height: TALL },
-  { id: "display-2", label: "Display 2", width: SECOND.width, height: SECOND.height },
+  { id: "display-1", label: "Display 1", width: WIDE, height: TALL, refreshRate: 120 },
+  { id: "display-2", label: "Display 2", width: SECOND.width, height: SECOND.height, refreshRate: 60 },
 ];
 
 /** Everything the fake platform did, so the checks can assert on it. */
@@ -138,7 +139,7 @@ const fakePipe: ScreenPipe = {
   openSettings: async () => {
     platform.settingsOpened += 1;
   },
-  async open(displayId, onFrame): Promise<OpenFeed> {
+  async open(displayId, onFrame, options): Promise<OpenFeed> {
     platform.lastRequest = displayId;
     const display = displays.find((entry) => entry.id === displayId) ?? displays[0];
     platform.opened += 1;
@@ -154,10 +155,16 @@ const fakePipe: ScreenPipe = {
           sending = false;
         });
     }, 60);
+    let currentRate = options?.requestedFps || display.refreshRate;
     return {
       id: display.id,
       width: display.width,
       height: display.height,
+      refreshRate: display.refreshRate,
+      fps: Math.min(currentRate, display.refreshRate),
+      setRate(rate) {
+        currentRate = Math.min(rate, display.refreshRate);
+      },
       close() {
         window.clearInterval(timer);
         platform.closed += 1;
@@ -238,6 +245,9 @@ async function main() {
   check("the screen seam reports itself supported through the swapped source", screen.isSupported(), {
     canList: screen.canList(),
   });
+  setScreenQuality("balanced");
+  check("the screen quality preference is persisted like other live settings", screenQuality() === "balanced" && localStorage.getItem("belo.screen.quality") === "balanced");
+  setScreenQuality("auto");
 
   // 1. The camera first, because that is what a Use view opens with.
   live.setActive!(true);

@@ -3,10 +3,21 @@
   "identifier": "default",
   "description": "Core window access plus native file dialogs for opening and creating .belo projects.",
   "windows": [
-    "main"
+    "main",
+    "belo-hud"
   ],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-create",
+    "core:window:allow-destroy",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-decorations",
+    "core:window:allow-set-focusable",
+    "core:window:allow-set-position",
+    "core:window:allow-set-skip-taskbar",
     "dialog:default",
     "fs:default"
   ]

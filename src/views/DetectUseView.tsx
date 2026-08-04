@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BoundingBox,
   Brain,
@@ -12,6 +12,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import { FeedPicker } from "../components/FeedPicker";
+import { ScreenQualityPicker } from "../components/ScreenQualityPicker";
 import { ScreenDenied, useScreenOffered } from "../components/ScreenDenied";
 import { SourceToggle } from "../components/SourceToggle";
 import { DetectionOverlay } from "../components/DetectionOverlay";
@@ -27,6 +28,9 @@ import {
   type ScoreThreshold,
 } from "../lib/scoreThreshold";
 import { useLiveSource, type FeedKind } from "../lib/useWebcam";
+import { screenStartOptions, useScreenQuality } from "../lib/screenQuality";
+import type { ScreenMetrics } from "../lib/screen";
+import { useScreenHud, type HudCommand, type HudState } from "../lib/hud";
 
 const TICK_MS = 220;
 
@@ -88,6 +92,9 @@ export function DetectUseView() {
   const toast = useStore((state) => state.toast);
   const detectObjects = useStore((state) => state.detectObjects);
   const addFromDrawable = useStore((state) => state.addFromDrawable);
+  const addBox = useStore((state) => state.addBox);
+  const activeLabelId = useStore((state) => state.activeLabelId);
+  const setActiveLabel = useStore((state) => state.setActiveLabel);
 
   // Shared with the box annotator's guesses, so one cutoff governs the app.
   const threshold = useScoreThreshold();
@@ -95,9 +102,30 @@ export function DetectUseView() {
   // Camera on open, in both Use views, whatever ran last time.
   const [source, setSource] = useState<FeedKind>("camera");
   const screenOffered = useScreenOffered();
-  const { videoRef, status, error, refused, options, optionId, select, switching, retry } =
-    useLiveSource(live, source);
+  const [screenQuality, setScreenQuality] = useScreenQuality();
+  const [screenMetrics, setScreenMetrics] = useState<ScreenMetrics | null>(null);
+  const screenOptions = useMemo(
+    () => screenStartOptions(screenQuality, setScreenMetrics),
+    [screenQuality],
+  );
+  const {
+    videoRef,
+    status,
+    error,
+    refused,
+    options,
+    optionId,
+    select,
+    switching,
+    retry,
+    reportInference,
+  } = useLiveSource(live, source, screenOptions);
   const [liveDetections, setLiveDetections] = useState<Detection[]>([]);
+  const [frozen, setFrozen] = useState(false);
+  const frozenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [frozenFrameUrl, setFrozenFrameUrl] = useState<string | null>(null);
+  const [frozenImageId, setFrozenImageId] = useState<string | null>(null);
+  const [savingFrozen, setSavingFrozen] = useState(false);
   const [savingFrame, setSavingFrame] = useState(false);
   const liveInferenceRef = useRef(false);
 
@@ -111,8 +139,8 @@ export function DetectUseView() {
 
 
   useEffect(() => {
-    if (!live || status !== "live" || !hasModel) {
-      setLiveDetections([]);
+    if (!live || status !== "live" || !hasModel || frozen) {
+      if (!frozen) setLiveDetections([]);
       return;
     }
     let cancelled = false;
@@ -121,6 +149,7 @@ export function DetectUseView() {
       const video = videoRef.current;
       if (!video || video.videoWidth === 0) return;
       liveInferenceRef.current = true;
+      const started = performance.now();
       let frame: HTMLCanvasElement;
       try {
         frame = toSquareCanvas(video);
@@ -134,6 +163,7 @@ export function DetectUseView() {
         })
         .catch(() => undefined)
         .finally(() => {
+          reportInference(performance.now() - started);
           liveInferenceRef.current = false;
         });
     }, TICK_MS);
@@ -141,7 +171,7 @@ export function DetectUseView() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [detectObjects, hasModel, live, status, threshold, videoRef]);
+  }, [detectObjects, hasModel, live, status, threshold, videoRef, frozen, reportInference]);
 
   useEffect(() => {
     if (!stillSource || !hasModel) return;
@@ -217,6 +247,92 @@ export function DetectUseView() {
     });
   };
 
+  useEffect(() => {
+    if (!live || source !== "screen" || status !== "live") {
+      setFrozen(false);
+      frozenCanvasRef.current = null;
+      setFrozenFrameUrl(null);
+      setFrozenImageId(null);
+      setSavingFrozen(false);
+    }
+  }, [live, source, status]);
+
+  const freezeFrame = useCallback(async () => {
+    const video = videoRef.current;
+    if (source !== "screen" || !video || video.videoWidth === 0 || frozen) return;
+    const canvas = toSquareCanvas(video);
+    frozenCanvasRef.current = canvas;
+    setFrozenFrameUrl(canvas.toDataURL("image/jpeg", 0.72));
+    setFrozen(true);
+    video.pause();
+    setSavingFrozen(true);
+    const before = useStore.getState().manifest?.images.length ?? 0;
+    try {
+      const saved = await addFromDrawable(canvas, null, "capture", "screen");
+      const manifestAfter = useStore.getState().manifest;
+      const record = manifestAfter?.images[manifestAfter.images.length - 1];
+      if (saved && manifestAfter && manifestAfter.images.length === before + 1 && record) {
+        setFrozenImageId(record.id);
+      } else if (!saved) {
+        toast("Could not save the frozen screen frame", "bad");
+      }
+    } finally {
+      setSavingFrozen(false);
+    }
+  }, [addFromDrawable, frozen, source, toast, videoRef]);
+
+  const resumeFrame = useCallback(() => {
+    setFrozen(false);
+    frozenCanvasRef.current = null;
+    setFrozenFrameUrl(null);
+    setFrozenImageId(null);
+    void videoRef.current?.play().catch(() => undefined);
+  }, [videoRef]);
+
+  const hudToggleRef = useRef<(on: boolean) => void>(() => undefined);
+  const hudState = useMemo<HudState>(() => {
+    const frozenRecord = frozenImageId
+      ? manifest?.images.find((image) => image.id === frozenImageId)
+      : null;
+    return {
+      mode: "detect",
+      projectName: manifest?.name ?? "Belo",
+      frozen,
+      saving: savingFrozen,
+      frameDataUrl: frozenFrameUrl,
+      labels: manifest?.labels.map((label) => ({ id: label.id, name: label.name, color: label.color })) ?? [],
+      activeLabelId,
+      verdict: null,
+      boxCount: frozenRecord?.boxes?.length ?? liveDetections.length,
+      achievedFps: source === "screen" ? screenMetrics?.fps : undefined,
+    };
+  }, [activeLabelId, frozen, frozenFrameUrl, frozenImageId, liveDetections.length, manifest, savingFrozen, screenMetrics?.fps, source]);
+
+  const onHudCommand = useCallback(
+    (command: HudCommand) => {
+      if (command.type === "freeze") {
+        void freezeFrame();
+      } else if (command.type === "resume") {
+        resumeFrame();
+      } else if (command.type === "hide") {
+        hudToggleRef.current(false);
+      } else if (command.type === "set-label") {
+        setActiveLabel(command.labelId);
+      } else if (command.type === "box" && frozenImageId) {
+        addBox(frozenImageId, command.labelId, command.rect);
+      }
+    },
+    [addBox, freezeFrame, frozenImageId, resumeFrame, setActiveLabel],
+  );
+
+  const hud = useScreenHud({
+    eligible: Boolean(live && source === "screen" && status === "live" && manifest),
+    state: hudState,
+    onCommand: onHudCommand,
+    onError: (message) => toast(`Capture HUD disabled: ${message}`, "bad"),
+  });
+  hudToggleRef.current = hud.setEnabled;
+
   const saveFrame = async () => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || savingFrame) return;
@@ -266,6 +382,24 @@ export function DetectUseView() {
             {screenOffered ? (
               <SourceToggle value={source} onPick={setSource} disabled={switching} />
             ) : null}
+            {live && source === "screen" ? (
+              <ScreenQualityPicker
+                value={screenQuality}
+                onChange={setScreenQuality}
+                fps={screenMetrics?.fps}
+                compact
+              />
+            ) : null}
+            {live && source === "screen" ? (
+              <button
+                className={hud.enabled ? "btn btn--sm btn--primary" : "btn btn--sm"}
+                aria-pressed={hud.enabled}
+                onClick={() => hud.setEnabled(!hud.enabled)}
+                title="Show the capture HUD when Belo is not focused"
+              >
+                HUD {hud.enabled ? "on" : "off"}
+              </button>
+            ) : null}
             {live ? (
               <FeedPicker
                 what={source === "screen" ? "Screen" : "Camera"}
@@ -274,6 +408,14 @@ export function DetectUseView() {
                 onPick={select}
                 compact
               />
+            ) : null}
+            {live && source === "screen" && status === "live" ? (
+              <button
+                className={frozen ? "btn btn--sm btn--primary" : "btn btn--sm"}
+                onClick={() => void (frozen ? resumeFrame() : freezeFrame())}
+              >
+                {frozen ? "Resume frame" : "Freeze frame"}
+              </button>
             ) : null}
             <button
               className={live ? "btn btn--sm btn--danger" : "btn btn--sm btn--go"}
@@ -287,6 +429,9 @@ export function DetectUseView() {
 
         <div className="use__stage">
           <video ref={videoRef} className="use__video" playsInline muted autoPlay />
+          {frozenFrameUrl ? (
+            <img className="use__frozen" src={frozenFrameUrl} alt="Frozen screen frame" />
+          ) : null}
           {live && status === "live" ? (
             <DetectionOverlay
               sourceRef={videoRef}

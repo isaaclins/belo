@@ -727,6 +727,8 @@ pub fn run() {
             screen::screen_request_permission,
             screen::screen_displays,
             screen::screen_start,
+            screen::screen_set_rate,
+            screen::screen_refresh_filter,
             screen::screen_stop,
             screen::screen_open_settings,
             snip::snip_supported,

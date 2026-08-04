@@ -332,6 +332,75 @@
   font-size: 12px;
 }
 
+/* Screen quality uses the same hard-edged segmented language as RatePicker,
+   with an explicit Auto step because the native display mode is the default. */
+.screenquality {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.screenquality legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.screenquality__steps {
+  display: flex;
+  overflow: hidden;
+  border: var(--border-w-thin) solid var(--ink);
+  border-radius: var(--radius);
+}
+
+.screenquality__step {
+  padding: 4px 7px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 0;
+  border-right: var(--border-w-thin) solid var(--ink);
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.screenquality__step:last-child {
+  border-right: 0;
+}
+
+.screenquality__step:hover {
+  background: var(--paper-deep);
+}
+
+.screenquality__step--on {
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.screenquality__step:focus-visible {
+  outline: 3px solid var(--accent-2);
+  outline-offset: -3px;
+}
+
+.screenquality__fps {
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.screenquality--compact .screenquality__step {
+  padding: 3px 5px;
+  font-size: 9px;
+}
+
 @media (max-width: 720px) {
   .campick--compact .campick__label {
     /* The icon carries the meaning once the header gets tight. */

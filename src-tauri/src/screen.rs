@@ -12,12 +12,11 @@
 // the size we ask for, we convert them to RGB, JPEG encode them and push the
 // bytes down a Tauri channel. The frontend decodes each JPEG and paints it into
 // a canvas whose `captureStream()` is a normal MediaStream, so every view keeps
-// consuming exactly one seam and cannot tell a screen from a camera. The cost
-// of that path is one JPEG encode plus one decode per frame, and one IPC
-// message per frame; frames above 1 KB travel through Tauri's fetch based
-// channel route rather than an eval, which is why the capture is asked for at
-// ten frames a second and at most 1280 pixels on the long edge. Live inference
-// samples the stage every 220 ms, so a faster feed would only be thrown away.
+// consuming exactly one seam and cannot tell a screen from a camera. The native
+// packet carries only a tiny timing header, while the JPEG remains a raw channel
+// payload. The frontend drops frames while decoding and the adaptive controller
+// changes the native interval when measured work cannot keep up. Live inference
+// still samples the stage every 220 ms, independently of capture rate.
 //
 // Everything that can be tested without a display is a plain function at the
 // top of this file. The parts that need a real screen are in `mac` below and
@@ -25,11 +24,16 @@
 
 use serde::Serialize;
 
-/// The frontend never asks for more than this on the long edge.
+/// Defaults for Auto. Named quality presets can pass a different edge and JPEG
+/// quality, while the display mode supplies the rate.
 #[cfg(target_os = "macos")]
-pub const MAX_EDGE: u32 = 1280;
+pub const DEFAULT_MAX_EDGE: u32 = 1120;
 #[cfg(target_os = "macos")]
-const JPEG_QUALITY: u8 = 72;
+pub const DEFAULT_JPEG_QUALITY: u8 = 55;
+#[cfg(target_os = "macos")]
+const FALLBACK_REFRESH_RATE: u32 = 60;
+#[cfg(target_os = "macos")]
+const MAX_FPS: u32 = 240;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +44,7 @@ pub struct DisplayInfo {
     pub label: String,
     pub width: u32,
     pub height: u32,
+    pub refresh_rate: u32,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -48,6 +53,8 @@ pub struct FeedInfo {
     pub id: String,
     pub width: u32,
     pub height: u32,
+    pub refresh_rate: u32,
+    pub fps: u32,
 }
 
 /// Fits a display into `max` on its long edge, keeping the aspect ratio and
@@ -102,16 +109,46 @@ pub fn bgra_to_rgb(src: &[u8], width: u32, height: u32, bytes_per_row: usize) ->
 
 /// Encodes tightly packed RGB as a baseline JPEG.
 #[cfg(target_os = "macos")]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    encode_jpeg_with_quality(rgb, width, height, DEFAULT_JPEG_QUALITY)
+}
+
+#[cfg(target_os = "macos")]
+fn encode_jpeg_with_quality(
+    rgb: &[u8],
+    width: u32,
+    height: u32,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
     if rgb.len() != width as usize * height as usize * 3 {
         return Err("the pixel buffer does not match its dimensions".into());
     }
     let mut out = Vec::with_capacity(rgb.len() / 8);
-    let encoder = jpeg_encoder::Encoder::new(&mut out, JPEG_QUALITY);
+    let encoder = jpeg_encoder::Encoder::new(&mut out, quality.clamp(1, 100));
     encoder
-        .encode(rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb)
+        .encode(
+            rgb,
+            width as u16,
+            height as u16,
+            jpeg_encoder::ColorType::Rgb,
+        )
         .map_err(|err| format!("could not encode the frame: {err}"))?;
     Ok(out)
+}
+
+#[cfg(target_os = "macos")]
+fn frame_packet(jpeg: Vec<u8>, native_micros: u32) -> Vec<u8> {
+    let sent_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_micros().min(u64::MAX as u128) as u64)
+        .unwrap_or(0);
+    let mut packet = Vec::with_capacity(16 + jpeg.len());
+    packet.extend_from_slice(b"BLFR");
+    packet.extend_from_slice(&sent_micros.to_le_bytes());
+    packet.extend_from_slice(&native_micros.to_le_bytes());
+    packet.extend_from_slice(&jpeg);
+    packet
 }
 
 #[cfg(target_os = "macos")]
@@ -121,14 +158,20 @@ mod mac {
     // that builds the rest of the app. The convenience crate that wraps this
     // framework pulls a Swift bridge that fails to compile on the macOS 14 SDK
     // CI builds on, which is why the messy part is written out here.
-    use super::{bgra_to_rgb, encode_jpeg, fit_within, DisplayInfo, FeedInfo, MAX_EDGE};
+    use super::{
+        bgra_to_rgb, encode_jpeg_with_quality, fit_within, frame_packet, DisplayInfo, FeedInfo,
+        DEFAULT_JPEG_QUALITY, DEFAULT_MAX_EDGE, FALLBACK_REFRESH_RATE, MAX_FPS,
+    };
     use block2::RcBlock;
     use dispatch2::DispatchQueue;
     use objc2::rc::Retained;
     use objc2::runtime::AnyClass;
     use objc2::runtime::{NSObject, ProtocolObject};
     use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
-    use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+    use objc2_core_graphics::{
+        CGDisplayCopyDisplayMode, CGDisplayMode, CGPreflightScreenCaptureAccess,
+        CGRequestScreenCaptureAccess,
+    };
     use objc2_core_media::{CMSampleBuffer, CMTime};
     use objc2_core_video::{
         CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
@@ -137,18 +180,19 @@ mod mac {
     };
     use objc2_foundation::NSObjectProtocol;
     use objc2_screen_capture_kit::{
-        SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamOutput,
-        SCStreamOutputType,
+        SCContentFilter, SCDisplay, SCShareableContent, SCStream, SCStreamConfiguration,
+        SCStreamOutput, SCStreamOutputType, SCWindow,
     };
     use std::sync::mpsc;
     use std::sync::Mutex;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tauri::ipc::{Channel, InvokeResponseBody};
 
     /// BGRA, the four character code CoreVideo wants for 32 bit little endian.
     const PIXEL_FORMAT_BGRA: u32 = u32::from_be_bytes(*b"BGRA");
     /// ScreenCaptureKit answers its content query on another queue.
     const CONTENT_TIMEOUT: Duration = Duration::from_secs(5);
+    pub(super) const BELO_BUNDLE_ID: &str = "app.belo";
 
     /// The running capture. Holding it here is what makes stopping immediate:
     /// stopping and dropping the stream releases ScreenCaptureKit, which is
@@ -158,6 +202,7 @@ mod mac {
     struct Capture {
         stream: Retained<SCStream>,
         output: Retained<FrameOutput>,
+        display_id: u32,
     }
 
     // Apple calls the output handler on its own queue, and the two Retained
@@ -166,6 +211,7 @@ mod mac {
 
     struct FrameSink {
         channel: Channel<InvokeResponseBody>,
+        jpeg_quality: u8,
     }
 
     define_class!(
@@ -187,25 +233,33 @@ mod mac {
                 if kind != SCStreamOutputType::Screen {
                     return;
                 }
-                let Some(jpeg) = encode_sample(sample) else {
+                let started = Instant::now();
+                let Some(jpeg) = encode_sample(sample, self.ivars().jpeg_quality) else {
                     return;
                 };
+                let native_micros = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
                 // A closed channel means the view is gone. Releasing the capture
                 // is the stop command's job, so there is nothing to do here.
-                let _ = self.ivars().channel.send(InvokeResponseBody::Raw(jpeg));
+                let _ = self
+                    .ivars()
+                    .channel
+                    .send(InvokeResponseBody::Raw(frame_packet(jpeg, native_micros)));
             }
         }
     );
 
     impl FrameOutput {
-        fn new(channel: Channel<InvokeResponseBody>) -> Retained<Self> {
-            let this = Self::alloc().set_ivars(FrameSink { channel });
+        fn new(channel: Channel<InvokeResponseBody>, jpeg_quality: u8) -> Retained<Self> {
+            let this = Self::alloc().set_ivars(FrameSink {
+                channel,
+                jpeg_quality,
+            });
             unsafe { msg_send![super(this), init] }
         }
     }
 
     /// One frame, from CoreVideo's padded BGRA to the JPEG the webview decodes.
-    fn encode_sample(sample: &CMSampleBuffer) -> Option<Vec<u8>> {
+    fn encode_sample(sample: &CMSampleBuffer, jpeg_quality: u8) -> Option<Vec<u8>> {
         let image = unsafe { sample.image_buffer() }?;
         let buffer: &CVPixelBuffer = &image;
         unsafe { CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) };
@@ -216,10 +270,10 @@ mod mac {
         let jpeg = if base.is_null() || width == 0 || height == 0 {
             None
         } else {
-            let pixels =
-                unsafe { std::slice::from_raw_parts(base as *const u8, stride * height) };
-            bgra_to_rgb(pixels, width as u32, height as u32, stride)
-                .and_then(|rgb| encode_jpeg(&rgb, width as u32, height as u32).ok())
+            let pixels = unsafe { std::slice::from_raw_parts(base as *const u8, stride * height) };
+            bgra_to_rgb(pixels, width as u32, height as u32, stride).and_then(|rgb| {
+                encode_jpeg_with_quality(&rgb, width as u32, height as u32, jpeg_quality).ok()
+            })
         };
         unsafe { CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) };
         jpeg
@@ -252,22 +306,73 @@ mod mac {
         CGRequestScreenCaptureAccess()
     }
 
+    fn display_refresh_rate(display_id: u32) -> u32 {
+        let mode = CGDisplayCopyDisplayMode(display_id);
+        let rate = mode
+            .as_deref()
+            .map(|mode| CGDisplayMode::refresh_rate(Some(mode)))
+            .unwrap_or(0.0);
+        if rate.is_finite() && rate > 0.0 {
+            (rate.round() as u32).clamp(1, MAX_FPS)
+        } else {
+            FALLBACK_REFRESH_RATE
+        }
+    }
+
+    /// The app owns both the main and HUD windows. ScreenCaptureKit accepts
+    /// window objects in the display filter, so every Belo window is excluded
+    /// by bundle id before the first frame is delivered.
+    pub(super) fn is_belo_bundle(bundle_id: &str) -> bool {
+        bundle_id == BELO_BUNDLE_ID
+    }
+
+    fn excluded_belo_windows(
+        content: &SCShareableContent,
+    ) -> Retained<objc2_foundation::NSArray<SCWindow>> {
+        let windows = unsafe { content.windows() };
+        let own: Vec<Retained<SCWindow>> = windows
+            .iter()
+            .filter(|window| {
+                unsafe { window.owningApplication() }.is_some_and(|app| {
+                    is_belo_bundle(&unsafe { app.bundleIdentifier() }.to_string())
+                })
+            })
+            .collect();
+        objc2_foundation::NSArray::from_retained_slice(&own)
+    }
+
+    fn display_filter(
+        content: &SCShareableContent,
+        display: &SCDisplay,
+    ) -> Retained<SCContentFilter> {
+        let excluded = excluded_belo_windows(content);
+        unsafe {
+            SCContentFilter::initWithDisplay_excludingWindows(
+                SCContentFilter::alloc(),
+                display,
+                &excluded,
+            )
+        }
+    }
+
     /// The displays ScreenCaptureKit is willing to share, waited for on this
     /// thread because every caller here is a command that has to answer.
     fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
         let (sender, receiver) = mpsc::channel::<Result<Retained<SCShareableContent>, String>>();
-        let handler = RcBlock::new(move |content: *mut SCShareableContent, error: *mut objc2_foundation::NSError| {
-            let answer = if content.is_null() {
-                Err(if error.is_null() {
-                    "ScreenCaptureKit returned no content".to_string()
+        let handler = RcBlock::new(
+            move |content: *mut SCShareableContent, error: *mut objc2_foundation::NSError| {
+                let answer = if content.is_null() {
+                    Err(if error.is_null() {
+                        "ScreenCaptureKit returned no content".to_string()
+                    } else {
+                        unsafe { (*error).localizedDescription() }.to_string()
+                    })
                 } else {
-                    unsafe { (*error).localizedDescription() }.to_string()
-                })
-            } else {
-                Ok(unsafe { Retained::retain(content) }.expect("content is not null"))
-            };
-            let _ = sender.send(answer);
-        });
+                    Ok(unsafe { Retained::retain(content) }.expect("content is not null"))
+                };
+                let _ = sender.send(answer);
+            },
+        );
         unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
         receiver
             .recv_timeout(CONTENT_TIMEOUT)
@@ -285,11 +390,15 @@ mod mac {
         Ok(unsafe { content.displays() }
             .iter()
             .enumerate()
-            .map(|(index, display)| DisplayInfo {
-                id: unsafe { display.displayID() }.to_string(),
-                label: format!("Display {}", index + 1),
-                width: unsafe { display.width() } as u32,
-                height: unsafe { display.height() } as u32,
+            .map(|(index, display)| {
+                let id = unsafe { display.displayID() };
+                DisplayInfo {
+                    id: id.to_string(),
+                    label: format!("Display {}", index + 1),
+                    width: unsafe { display.width() } as u32,
+                    height: unsafe { display.height() } as u32,
+                    refresh_rate: display_refresh_rate(id),
+                }
             })
             .collect())
     }
@@ -297,6 +406,8 @@ mod mac {
     pub fn start(
         display_id: Option<String>,
         fps: u32,
+        max_edge: u32,
+        jpeg_quality: u8,
         on_frame: Channel<InvokeResponseBody>,
     ) -> Result<FeedInfo, String> {
         if !available() {
@@ -317,18 +428,30 @@ mod mac {
             .or_else(|| all.iter().next())
             .ok_or_else(|| "This Mac reports no display to capture".to_string())?;
 
+        let display_id = unsafe { display.displayID() };
+        let refresh_rate = display_refresh_rate(display_id);
+        let effective_fps = if fps == 0 {
+            refresh_rate
+        } else {
+            fps.min(refresh_rate)
+        }
+        .clamp(1, MAX_FPS);
+        let edge = if max_edge == 0 {
+            DEFAULT_MAX_EDGE
+        } else {
+            max_edge.clamp(224, 4096)
+        };
         let (width, height) = fit_within(
             unsafe { display.width() } as u32,
             unsafe { display.height() } as u32,
-            MAX_EDGE,
+            edge,
         );
 
-        let filter = unsafe {
-            SCContentFilter::initWithDisplay_excludingWindows(
-                SCContentFilter::alloc(),
-                &display,
-                &objc2_foundation::NSArray::new(),
-            )
+        let filter = display_filter(&content, &display);
+        let jpeg_quality = if jpeg_quality == 0 {
+            DEFAULT_JPEG_QUALITY
+        } else {
+            jpeg_quality.clamp(1, 100)
         };
         let config = unsafe { SCStreamConfiguration::new() };
         unsafe {
@@ -337,16 +460,18 @@ mod mac {
             config.setPixelFormat(PIXEL_FORMAT_BGRA);
             config.setShowsCursor(true);
             config.setQueueDepth(3);
-            config.setMinimumFrameInterval(CMTime::with_seconds(
-                1.0 / fps.clamp(1, 30) as f64,
-                600,
-            ));
+            config.setMinimumFrameInterval(CMTime::with_seconds(1.0 / effective_fps as f64, 600));
         }
 
         let stream = unsafe {
-            SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, None)
+            SCStream::initWithFilter_configuration_delegate(
+                SCStream::alloc(),
+                &filter,
+                &config,
+                None,
+            )
         };
-        let output = FrameOutput::new(on_frame);
+        let output = FrameOutput::new(on_frame, jpeg_quality);
         let queue = DispatchQueue::new("com.belo.screen", None);
         unsafe {
             stream.addStreamOutput_type_sampleHandlerQueue_error(
@@ -355,7 +480,12 @@ mod mac {
                 Some(&queue),
             )
         }
-        .map_err(|err| format!("The screen feed could not start: {}", err.localizedDescription()))?;
+        .map_err(|err| {
+            format!(
+                "The screen feed could not start: {}",
+                err.localizedDescription()
+            )
+        })?;
 
         // startCapture answers asynchronously, and a failure here is the whole
         // difference between a black stage and an honest message.
@@ -375,13 +505,79 @@ mod mac {
         }
 
         let info = FeedInfo {
-            id: unsafe { display.displayID() }.to_string(),
+            id: display_id.to_string(),
             width,
             height,
+            refresh_rate,
+            fps: effective_fps,
         };
-        *RUNNING.lock().map_err(|_| "capture state is poisoned")? =
-            Some(Capture { stream, output });
+        *RUNNING.lock().map_err(|_| "capture state is poisoned")? = Some(Capture {
+            stream,
+            output,
+            display_id,
+        });
         Ok(info)
+    }
+
+    pub fn set_rate(fps: u32) -> Result<u32, String> {
+        let rate = fps.clamp(1, MAX_FPS);
+        let running = RUNNING.lock().map_err(|_| "capture state is poisoned")?;
+        let Some(capture) = running.as_ref() else {
+            return Ok(rate);
+        };
+        let config = unsafe { SCStreamConfiguration::new() };
+        unsafe {
+            config.setMinimumFrameInterval(CMTime::with_seconds(1.0 / rate as f64, 600));
+        }
+        let (sender, receiver) = mpsc::channel::<Option<String>>();
+        let handler = RcBlock::new(move |error: *mut objc2_foundation::NSError| {
+            let _ = sender.send(if error.is_null() {
+                None
+            } else {
+                Some(unsafe { (*error).localizedDescription() }.to_string())
+            });
+        });
+        unsafe {
+            capture
+                .stream
+                .updateConfiguration_completionHandler(&config, Some(&handler));
+        }
+        match receiver.recv_timeout(CONTENT_TIMEOUT) {
+            Ok(None) => Ok(rate),
+            Ok(Some(message)) => Err(format!("The screen rate could not change: {message}")),
+            Err(_) => Err("The screen rate change did not finish in time".into()),
+        }
+    }
+
+    pub fn refresh_filter() -> Result<(), String> {
+        let running = RUNNING.lock().map_err(|_| "capture state is poisoned")?;
+        let Some(capture) = running.as_ref() else {
+            return Ok(());
+        };
+        let content = shareable_content()?;
+        let display = unsafe { content.displays() }
+            .iter()
+            .find(|display| unsafe { display.displayID() } == capture.display_id)
+            .ok_or_else(|| "The captured display is no longer available".to_string())?;
+        let filter = display_filter(&content, &display);
+        let (sender, receiver) = mpsc::channel::<Option<String>>();
+        let handler = RcBlock::new(move |error: *mut objc2_foundation::NSError| {
+            let _ = sender.send(if error.is_null() {
+                None
+            } else {
+                Some(unsafe { (*error).localizedDescription() }.to_string())
+            });
+        });
+        unsafe {
+            capture
+                .stream
+                .updateContentFilter_completionHandler(&filter, Some(&handler));
+        }
+        match receiver.recv_timeout(CONTENT_TIMEOUT) {
+            Ok(None) => Ok(()),
+            Ok(Some(message)) => Err(format!("The screen filter could not refresh: {message}")),
+            Err(_) => Err("The screen filter refresh did not finish in time".into()),
+        }
     }
 
     pub fn stop() -> Result<(), String> {
@@ -401,7 +597,9 @@ mod mac {
                 ProtocolObject::from_ref(&*capture.output),
                 SCStreamOutputType::Screen,
             );
-            capture.stream.stopCaptureWithCompletionHandler(Some(&handler));
+            capture
+                .stream
+                .stopCaptureWithCompletionHandler(Some(&handler));
         }
         // The stream is dropped either way: waiting is only so the caller knows
         // the indicator is out by the time the command returns.
@@ -475,16 +673,43 @@ pub fn screen_displays() -> Result<Vec<DisplayInfo>, String> {
 pub fn screen_start(
     display_id: Option<String>,
     fps: u32,
+    max_edge: u32,
+    jpeg_quality: u8,
     on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<FeedInfo, String> {
     #[cfg(target_os = "macos")]
     {
-        mac::start(display_id, fps, on_frame)
+        mac::start(display_id, fps, max_edge, jpeg_quality, on_frame)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (display_id, fps, on_frame);
+        let _ = (display_id, fps, max_edge, jpeg_quality, on_frame);
         Err("unsupported".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn screen_set_rate(fps: u32) -> Result<u32, String> {
+    #[cfg(target_os = "macos")]
+    {
+        mac::set_rate(fps)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = fps;
+        Err("unsupported".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn screen_refresh_filter() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        mac::refresh_filter()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
     }
 }
 
@@ -566,8 +791,14 @@ mod tests {
 
     #[test]
     fn a_buffer_that_cannot_be_trusted_is_refused_rather_than_read_past() {
-        assert!(bgra_to_rgb(&[0u8; 64], 4, 4, 8).is_none(), "stride under the row width");
-        assert!(bgra_to_rgb(&[0u8; 16], 4, 4, 16).is_none(), "buffer shorter than the frame");
+        assert!(
+            bgra_to_rgb(&[0u8; 64], 4, 4, 8).is_none(),
+            "stride under the row width"
+        );
+        assert!(
+            bgra_to_rgb(&[0u8; 16], 4, 4, 16).is_none(),
+            "buffer shorter than the frame"
+        );
         assert!(bgra_to_rgb(&[], 0, 0, 0).is_none(), "an empty frame");
     }
 
@@ -583,7 +814,10 @@ mod tests {
         let jpeg = encode_jpeg(&rgb, width, height).expect("a full buffer encodes");
         assert_eq!(&jpeg[0..2], &[0xFF, 0xD8], "starts with the JPEG marker");
         assert_eq!(&jpeg[jpeg.len() - 2..], &[0xFF, 0xD9], "and ends with one");
-        assert!(jpeg.len() < rgb.len(), "an encode that grows the frame is not an encode");
+        assert!(
+            jpeg.len() < rgb.len(),
+            "an encode that grows the frame is not an encode"
+        );
         // Dimensions live in the SOF0 segment, which is what the decoder reads.
         let sof = jpeg
             .windows(2)
@@ -597,6 +831,46 @@ mod tests {
     #[test]
     fn a_mismatched_buffer_is_an_error_and_not_a_panic() {
         assert!(encode_jpeg(&[0u8; 10], 32, 20).is_err());
+    }
+
+    #[test]
+    fn frame_path_measurement_reports_the_native_work() {
+        fn measure(width: u32, height: u32, quality: u8) -> (f64, usize) {
+            let stride = width as usize * 4;
+            let mut bgra = vec![0u8; stride * height as usize];
+            for (index, byte) in bgra.iter_mut().enumerate() {
+                *byte = (index.wrapping_mul(37) & 0xff) as u8;
+            }
+            let mut total = 0u128;
+            let mut bytes = 0usize;
+            for _ in 0..3 {
+                let started = std::time::Instant::now();
+                let rgb = bgra_to_rgb(&bgra, width, height, stride).expect("synthetic pixels");
+                let jpeg = encode_jpeg_with_quality(&rgb, width, height, quality)
+                    .expect("synthetic frame");
+                total += started.elapsed().as_micros();
+                bytes = jpeg.len();
+            }
+            (total as f64 / 3_000.0, bytes)
+        }
+
+        let before = measure(1280, 830, 72);
+        let auto = measure(DEFAULT_MAX_EDGE, 700, DEFAULT_JPEG_QUALITY);
+        let smooth = measure(960, 600, 55);
+        let balanced = measure(1440, 900, 68);
+        println!(
+            "synthetic native frame path: before 1280x830 q72 = {:.2} ms, {} KB; Auto 1120x700 q55 = {:.2} ms, {} KB; Smooth 960x600 q55 = {:.2} ms, {} KB; Balanced 1440x900 q68 = {:.2} ms, {} KB",
+            before.0,
+            before.1 / 1024,
+            auto.0,
+            auto.1 / 1024,
+            smooth.0,
+            smooth.1 / 1024,
+            balanced.0,
+            balanced.1 / 1024
+        );
+        assert!(before.0 > 0.0 && auto.0 > 0.0);
+        assert!(before.1 > 0 && auto.1 > 0);
     }
 
     /// The one thing about the native path that can be checked without
@@ -613,9 +887,20 @@ mod tests {
                 for display in &displays {
                     assert!(!display.id.is_empty());
                     assert!(display.width > 0 && display.height > 0);
-                    assert_eq!(fit_within(display.width, display.height, MAX_EDGE).0 % 2, 0);
+                    assert!(display.refresh_rate > 0);
+                    assert_eq!(
+                        fit_within(display.width, display.height, DEFAULT_MAX_EDGE).0 % 2,
+                        0
+                    );
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_capture_filter_excludes_belo_windows_by_bundle_id() {
+        assert!(super::mac::is_belo_bundle("app.belo"));
+        assert!(!super::mac::is_belo_bundle("com.apple.finder"));
+        assert_eq!(super::mac::BELO_BUNDLE_ID, "app.belo");
     }
 }

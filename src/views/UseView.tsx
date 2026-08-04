@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import {
   Brain,
   Check,
@@ -20,7 +28,11 @@ import { FeedPicker } from "../components/FeedPicker";
 import { ScreenDenied, useScreenOffered } from "../components/ScreenDenied";
 import { SourceToggle } from "../components/SourceToggle";
 import { RatePicker } from "../components/RatePicker";
+import { ScreenQualityPicker } from "../components/ScreenQualityPicker";
 import { captureIntervalMs, MAX_IN_FLIGHT, useCaptureRate } from "../lib/captureRate";
+import { screenStartOptions, useScreenQuality } from "../lib/screenQuality";
+import type { ScreenMetrics } from "../lib/screen";
+import { useScreenHud, type HudCommand, type HudState } from "../lib/hud";
 import { EmptyState, Meter, pct, swatch } from "../components/ui";
 import { isImageFile, loadImageElement, toSquareCanvas } from "../lib/images";
 import { storage } from "../lib/storage";
@@ -241,9 +253,28 @@ export function UseView() {
   // somebody who left the screen running yesterday.
   const [source, setSource] = useState<FeedKind>("camera");
   const screenOffered = useScreenOffered();
-  const { videoRef, status, error, refused, options, optionId, select, switching, retry } =
-    useLiveSource(live, source);
+  const [screenQuality, setScreenQuality] = useScreenQuality();
+  const [screenMetrics, setScreenMetrics] = useState<ScreenMetrics | null>(null);
+  const screenOptions = useMemo(
+    () => screenStartOptions(screenQuality, setScreenMetrics),
+    [screenQuality],
+  );
+  const {
+    videoRef,
+    status,
+    error,
+    refused,
+    options,
+    optionId,
+    select,
+    switching,
+    retry,
+    reportInference,
+  } = useLiveSource(live, source, screenOptions);
   const [livePrediction, setLivePrediction] = useState<Prediction | null>(null);
+  const [frozen, setFrozen] = useState(false);
+  const frozenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [frozenFrameUrl, setFrozenFrameUrl] = useState<string | null>(null);
 
   const inFlight = useRef(0);
   const [stillUrl, setStillUrl] = useState<string | null>(null);
@@ -253,8 +284,8 @@ export function UseView() {
   const stillRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
-    if (!live || status !== "live" || !hasModel) {
-      setLivePrediction(null);
+    if (!live || status !== "live" || !hasModel || frozen) {
+      if (!frozen) setLivePrediction(null);
       return;
     }
     let cancelled = false;
@@ -264,6 +295,7 @@ export function UseView() {
       const video = videoRef.current;
       if (!video || video.videoWidth === 0) return;
       inFlight = true;
+      const started = performance.now();
       const frame = toSquareCanvas(video);
       void predict(frame, attentionOn)
         .then((result) => {
@@ -271,6 +303,7 @@ export function UseView() {
         })
         .catch(() => undefined)
         .finally(() => {
+          reportInference(performance.now() - started);
           inFlight = false;
         });
     }, TICK_MS);
@@ -278,11 +311,19 @@ export function UseView() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [live, status, hasModel, predict, videoRef, attentionOn]);
+  }, [live, status, hasModel, predict, videoRef, attentionOn, frozen, reportInference]);
 
   useEffect(() => () => {
     if (stillUrl) URL.revokeObjectURL(stillUrl);
   }, [stillUrl]);
+
+  useEffect(() => {
+    if (!live || source !== "screen" || status !== "live") {
+      setFrozen(false);
+      frozenCanvasRef.current = null;
+      setFrozenFrameUrl(null);
+    }
+  }, [live, source, status]);
 
   const runStill = useCallback(
     async (file: File) => {
@@ -327,15 +368,33 @@ export function UseView() {
       .map((id) => manifest?.labels.find((l) => l.id === id)?.name ?? "the label")
       .join(" + ") || "no label";
 
+  const freezeFrame = useCallback(() => {
+    const video = videoRef.current;
+    if (source !== "screen" || !video || video.videoWidth === 0) return;
+    const canvas = toSquareCanvas(video);
+    frozenCanvasRef.current = canvas;
+    setFrozenFrameUrl(canvas.toDataURL("image/jpeg", 0.72));
+    setFrozen(true);
+    video.pause();
+  }, [source, videoRef]);
+
+  const resumeFrame = useCallback(() => {
+    setFrozen(false);
+    frozenCanvasRef.current = null;
+    setFrozenFrameUrl(null);
+    void videoRef.current?.play().catch(() => undefined);
+  }, [videoRef]);
+
   // One frame per call, no toast: a hold can call this many times and the
   // report comes once at the end. Frames are dropped rather than queued when
-  // the writes fall behind, which is what keeps 12 fps from piling up.
+  // the writes fall behind, which is what keeps a fast screen feed from piling up.
   const teachFromVideo = (labelIds: string[]) => {
+    const frozenCanvas = frozenCanvasRef.current;
     const video = videoRef.current;
-    if (!video || video.videoWidth === 0) return false;
-    if (inFlight.current >= MAX_IN_FLIGHT) return false;
+    const frame = frozenCanvas ?? (video && video.videoWidth > 0 ? toSquareCanvas(video) : null);
+    if (!frame || inFlight.current >= MAX_IN_FLIGHT) return false;
     inFlight.current += 1;
-    void addFromDrawable(toSquareCanvas(video), labelIds, "feedback", source).finally(() => {
+    void addFromDrawable(frame, labelIds, "feedback", source).finally(() => {
       inFlight.current -= 1;
     });
     return true;
@@ -352,6 +411,54 @@ export function UseView() {
     const many = count > 1 ? `${count} frames` : `1 ${what}`;
     toast(`${many} added to ${namesFor(labelIds)}. It retrains itself in a moment.`, "good");
   };
+
+  const hudToggleRef = useRef<(on: boolean) => void>(() => undefined);
+  const hudState = useMemo<HudState>(() => {
+    const multiLabels =
+      livePrediction?.scores
+        .filter((row) => row.score >= MULTI_THRESHOLD)
+        .map((row) => row.labelId) ?? [];
+    return {
+      mode: "classify",
+      projectName: manifest?.name ?? "Belo",
+      frozen,
+      saving: false,
+      frameDataUrl: frozenFrameUrl,
+      labels: manifest?.labels.map((label) => ({ id: label.id, name: label.name, color: label.color })) ?? [],
+      activeLabelId: manifest?.labels[0]?.id ?? null,
+      verdict: livePrediction
+        ? {
+            labelId: manifest?.mode === "multi" ? null : livePrediction.labelId,
+            labelIds: manifest?.mode === "multi" ? multiLabels : [livePrediction.labelId],
+            confidence: livePrediction.confidence,
+          }
+        : null,
+      boxCount: 0,
+      achievedFps: source === "screen" ? screenMetrics?.fps : undefined,
+    };
+  }, [frozen, frozenFrameUrl, livePrediction, manifest, screenMetrics?.fps, source]);
+
+  const onHudCommand = useCallback(
+    (command: HudCommand) => {
+      if (command.type === "freeze") {
+        freezeFrame();
+      } else if (command.type === "resume") {
+        resumeFrame();
+      } else if (command.type === "hide") {
+        hudToggleRef.current(false);
+      } else if (command.type === "teach" && frozenCanvasRef.current) {
+        void addFromDrawable(frozenCanvasRef.current, command.labelIds, "feedback", "screen");
+      }
+    },
+    [addFromDrawable, freezeFrame, resumeFrame],
+  );
+
+  const hud = useScreenHud({
+    eligible: Boolean(live && source === "screen" && status === "live" && manifest),
+    state: hudState,
+    onCommand: onHudCommand,
+  });
+  hudToggleRef.current = hud.setEnabled;
 
   if (!manifest) return null;
   const multi = manifest.mode === "multi";
@@ -400,6 +507,24 @@ export function UseView() {
             {screenOffered ? (
               <SourceToggle value={source} onPick={setSource} disabled={switching} />
             ) : null}
+            {live && source === "screen" ? (
+              <ScreenQualityPicker
+                value={screenQuality}
+                onChange={setScreenQuality}
+                fps={screenMetrics?.fps}
+                compact
+              />
+            ) : null}
+            {live && source === "screen" ? (
+              <button
+                className={hud.enabled ? "btn btn--sm btn--primary" : "btn btn--sm"}
+                aria-pressed={hud.enabled}
+                onClick={() => hud.setEnabled(!hud.enabled)}
+                title="Show the capture HUD when Belo is not focused"
+              >
+                HUD {hud.enabled ? "on" : "off"}
+              </button>
+            ) : null}
             {live ? (
               <FeedPicker
                 what={source === "screen" ? "Screen" : "Camera"}
@@ -408,6 +533,14 @@ export function UseView() {
                 onPick={select}
                 compact
               />
+            ) : null}
+            {live && source === "screen" && status === "live" ? (
+              <button
+                className={frozen ? "btn btn--sm btn--primary" : "btn btn--sm"}
+                onClick={frozen ? resumeFrame : freezeFrame}
+              >
+                {frozen ? "Resume frame" : "Freeze frame"}
+              </button>
             ) : null}
             {live ? (
               <label className="switch">
@@ -435,6 +568,9 @@ export function UseView() {
 
         <div className="use__stage">
           <video ref={videoRef} className="use__video" playsInline muted autoPlay />
+          {frozenFrameUrl ? (
+            <img className="use__frozen" src={frozenFrameUrl} alt="Frozen screen frame" />
+          ) : null}
           {live && status === "live" ? (
             <AttentionOverlay
               videoRef={videoRef}
