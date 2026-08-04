@@ -267,15 +267,15 @@ export function useScreenHud({
       if (cancelled || !runtime) return;
       manager.setRuntime(runtime);
       const main = runtime.currentWindow();
-      const initialFocused = await main.isFocused();
-      setFocused(initialFocused);
       unlistenFocus = await main.onFocusChanged(({ payload }) => setFocused(payload));
+      const currentFocused = await main.isFocused();
+      setFocused(currentFocused);
       unlistenCommand = await runtime.listen<HudCommand>(HUD_COMMAND_EVENT, (command) => {
         commandRef.current(command);
       });
       unlistenReady = await runtime.listen<null>(HUD_READY_EVENT, () => void manager.resend());
       void manager
-        .sync(shouldShowHud({ eligible, focused: initialFocused, enabled }), stateRef.current)
+        .sync(shouldShowHud({ eligible, focused: currentFocused, enabled }), stateRef.current)
         .catch((error: unknown) => onError?.(error instanceof Error ? error.message : String(error)));
     });
     return () => {
