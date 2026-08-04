@@ -1239,7 +1239,7 @@ answers with its own picker instead.
 ### Screen-region shortcut
 
 Belo 0.10.0 adds one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
-registers only for that project and invokes `/usr/bin/screencapture -i -x` with a private
+registers only for that project and resolves Apple's `screencapture` tool at runtime and invokes it with `-i -x` and a private
 temporary PNG path. **Esc** leaves no file and no manifest change. A completed region goes
 through the same 224 pixel JPEG intake as every other image, with `source: "capture"` and
 `feed: "screen"`; the active label is used for classification projects, while detect

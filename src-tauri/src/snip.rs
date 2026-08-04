@@ -2,7 +2,7 @@
 //
 // The hotkey is registered by the frontend through the global shortcut plugin;
 // when it fires, the frontend calls `snip_region` and this module runs the
-// system's own region picker. On macOS that is `/usr/bin/screencapture -i -x`:
+// system's own region picker. On macOS that is `screencapture -i -x`:
 // Apple's crosshair drag select, silent, writing a PNG to a path we hand it.
 // The user started it with a key press, so the picker taking over the screen is
 // the point rather than a surprise.
@@ -20,9 +20,59 @@ use std::path::{Path, PathBuf};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 
-/// Apple's own screenshot tool. Present on every macOS Belo runs on.
+const PICKER_NAME: &str = "screencapture";
+
+/// Resolve Apple's screenshot tool at runtime. macOS ships it in /usr/sbin,
+/// but checking PATH too keeps this honest on developer machines and future
+/// macOS layouts instead of pinning a guessed absolute path.
+fn picker_candidates() -> Vec<PathBuf> {
+    let mut paths = vec![
+        PathBuf::from("/usr/sbin/screencapture"),
+        PathBuf::from("/usr/bin/screencapture"),
+    ];
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path).map(|dir| dir.join(PICKER_NAME)));
+    }
+    paths
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn resolve_picker_from(candidates: impl IntoIterator<Item = PathBuf>) -> Res<PathBuf> {
+    let searched: Vec<PathBuf> = candidates.into_iter().collect();
+    if let Some(path) = searched.iter().find(|path| is_executable(path)).cloned() {
+        return Ok(path);
+    }
+    let searched = searched
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "could not find the region picker `{PICKER_NAME}`; searched: {searched}. Install or restore macOS screencapture, then try again"
+    ))
+}
+
 #[cfg(target_os = "macos")]
-pub const PICKER_BIN: &str = "/usr/bin/screencapture";
+fn resolve_picker() -> Res<PathBuf> {
+    resolve_picker_from(picker_candidates())
+}
 
 type Res<T> = Result<T, String>;
 
@@ -67,7 +117,8 @@ fn run_system_picker(target: &Path) -> Res<()> {
     // -i is the interactive region select, -x keeps it silent. Only a picker
     // that could not be started at all is an error here; whether it wrote
     // anything is decided by the file.
-    std::process::Command::new(PICKER_BIN)
+    let picker = resolve_picker()?;
+    std::process::Command::new(picker)
         .arg("-i")
         .arg("-x")
         .arg(target)
@@ -196,12 +247,23 @@ mod tests {
         assert_eq!(snip_supported(), cfg!(target_os = "macos"));
         #[cfg(target_os = "macos")]
         {
-            // The test checks the command shape only. It never probes or runs
-            // the real picker, because verification must not take over a desktop.
-            assert_eq!(PICKER_BIN, "/usr/bin/screencapture");
-            assert!(Path::new(PICKER_BIN).is_absolute());
+            // Resolution inspects metadata only. It never launches the picker,
+            // because verification must not take over a desktop.
+            let picker = resolve_picker().expect("macOS must ship screencapture");
+            assert!(picker.is_absolute());
+            assert!(is_executable(&picker));
         }
         #[cfg(not(target_os = "macos"))]
         assert!(snip_region().is_err(), "and elsewhere the command says so");
+    }
+
+    #[test]
+    fn a_missing_picker_reports_everything_it_searched() {
+        let missing = PathBuf::from("/definitely/not-a-belo-picker/screencapture");
+        let error = resolve_picker_from([missing.clone()]).expect_err("the fake picker is absent");
+        assert!(error.contains("screencapture"));
+        assert!(error.contains("searched"));
+        assert!(error.contains(&missing.display().to_string()));
+        assert!(error.contains("Install or restore"));
     }
 }
