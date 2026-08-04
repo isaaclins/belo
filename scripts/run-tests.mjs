@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const STEPS = [
   ["typecheck", "the TypeScript source still typechecks"],
+  ["check:gpu-recovery", "a shader-link failure falls back once and recovers"],
   ["check:boxes", "boxes survive drawing, saving and loading"],
   ["check:detect", "the detection layer decides the way it should"],
   ["check:curve", "a loss curve is read into the right epoch and the right words"],
@@ -36,7 +37,11 @@ const times = [];
 for (const [script, what] of STEPS) {
   const stepStarted = Date.now();
   console.log(`\n=== ${script}: ${what}`);
-  const run = spawnSync(npm, ["run", "-s", script], {
+  const command =
+    script === "check:gpu-recovery"
+      ? [process.execPath, join(root, "scripts", "check-gpu-recovery.mjs")]
+      : [npm, "run", "-s", script];
+  const run = spawnSync(command[0], command.slice(1), {
     cwd: root,
     stdio: "inherit",
     shell: process.platform === "win32",
