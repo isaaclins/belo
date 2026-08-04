@@ -113,6 +113,9 @@ export async function trainHead(input: TrainInput): Promise<TrainResult> {
         },
       },
     });
+  } catch (err) {
+    model.dispose();
+    throw err;
   } finally {
     xs.dispose();
     ys.dispose();

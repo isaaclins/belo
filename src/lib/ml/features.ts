@@ -61,33 +61,53 @@ export function applyAugment(pixels: tf.Tensor3D, aug: Augment): tf.Tensor3D {
 let loadingFull: Promise<tf.LayersModel> | null = null;
 let loading: Promise<tf.LayersModel> | null = null;
 let loadingDetect: Promise<tf.LayersModel> | null = null;
+let fullModel: tf.LayersModel | null = null;
+let featureModel: tf.LayersModel | null = null;
+let detectFeatureModel: tf.LayersModel | null = null;
+let loadGeneration = 0;
 
 function loadFull(): Promise<tf.LayersModel> {
   if (!loadingFull) {
-    loadingFull = (async () => {
+    const generation = loadGeneration;
+    const pending = (async () => {
       await initBackend();
-      return tf.loadLayersModel(MODEL_URL);
-    })().catch((err) => {
-      loadingFull = null;
+      const full = await tf.loadLayersModel(MODEL_URL);
+      if (generation !== loadGeneration) {
+        full.dispose();
+        throw new Error("The feature extractor was reset while it was loading");
+      }
+      fullModel = full;
+      return full;
+    })();
+    const tracked = pending.catch((err) => {
+      if (loadingFull === tracked) loadingFull = null;
       throw err;
     });
+    loadingFull = tracked;
   }
   return loadingFull;
 }
 
 export function loadFeatureModel(): Promise<tf.LayersModel> {
   if (!loading) {
-    loading = (async () => {
+    const generation = loadGeneration;
+    const pending = (async () => {
       const full = await loadFull();
       const cut = full.getLayer(CUT_LAYER);
       const truncated = tf.model({ inputs: full.inputs, outputs: cut.output });
       // One warm-up pass so the first real capture is not the slow one.
       tf.tidy(() => truncated.predict(tf.zeros([1, IMAGE_SIZE, IMAGE_SIZE, 3])) as tf.Tensor);
+      if (generation !== loadGeneration) {
+        throw new Error("The feature extractor was reset while it was loading");
+      }
+      featureModel = truncated;
       return truncated;
-    })().catch((err) => {
-      loading = null;
+    })();
+    const tracked = pending.catch((err) => {
+      if (loading === tracked) loading = null;
       throw err;
     });
+    loading = tracked;
   }
   return loading;
 }
@@ -99,7 +119,8 @@ export function loadFeatureModel(): Promise<tf.LayersModel> {
  */
 export function loadDetectFeatureModel(): Promise<tf.LayersModel> {
   if (!loadingDetect) {
-    loadingDetect = (async () => {
+    const generation = loadGeneration;
+    const pending = (async () => {
       const full = await loadFull();
       const both = tf.model({
         inputs: full.inputs,
@@ -114,13 +135,39 @@ export function loadDetectFeatureModel(): Promise<tf.LayersModel> {
         return (both.predict(zeros) as tf.Tensor[]).map((t) => t.reshape([t.size]));
       });
       warm.forEach((t) => t.dispose());
+      if (generation !== loadGeneration) {
+        throw new Error("The feature extractor was reset while it was loading");
+      }
+      detectFeatureModel = both;
       return both;
-    })().catch((err) => {
-      loadingDetect = null;
+    })();
+    const tracked = pending.catch((err) => {
+      if (loadingDetect === tracked) loadingDetect = null;
       throw err;
     });
+    loadingDetect = tracked;
   }
   return loadingDetect;
+}
+
+/**
+ * Drops every graph that owns MobileNet variables. A WebGL context failure
+ * invalidates those variables when the backend changes, so keeping the cached
+ * graph would make the next WASM pass use dead tensors.
+ */
+export function resetFeatureModels(): void {
+  loadGeneration += 1;
+  // The truncated graphs share the full model's layer variables. Disposing all
+  // three graphs independently disposes those variables three times and leaves
+  // the next graph with layers that are already disposed. One owner is enough.
+  const owner = fullModel ?? featureModel ?? detectFeatureModel;
+  featureModel = null;
+  detectFeatureModel = null;
+  fullModel = null;
+  loading = null;
+  loadingDetect = null;
+  loadingFull = null;
+  owner?.dispose();
 }
 
 /**

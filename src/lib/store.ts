@@ -39,7 +39,14 @@ import {
   normalizeToJpegBase64,
   type Drawable,
 } from "./images";
-import { initBackend } from "./ml/backend";
+import {
+  currentBackend,
+  initBackend,
+  isWebglFailure,
+  runMlExclusive,
+  runMlIfIdle,
+  switchToWasm,
+} from "./ml/backend";
 import { augmentFor, flipBoxes, VARIANTS } from "./augment";
 import { autoRetrainAllowed, createRetrainScheduler } from "./retrain";
 import {
@@ -48,6 +55,7 @@ import {
   embedWithSpatial,
   loadDetectFeatureModel,
   loadFeatureModel,
+  resetFeatureModels,
 } from "./ml/features";
 import type { Attention, AttentionMap } from "./attention";
 import { iou, matchDetections, type Detection, type LabeledRect } from "./detect";
@@ -330,10 +338,16 @@ type RunMode = "manual" | "auto";
 interface TrainRun {
   mode: RunMode;
   stop: boolean;
+  /** A failed GPU run may restart once after the session switches to WASM. */
+  gpuRecoveryAttempted: boolean;
   done: Promise<void>;
 }
 
 let currentRun: TrainRun | null = null;
+let gpuRecovery: Promise<boolean> | null = null;
+let gpuRecoveryFailed = false;
+let gpuFallbackNoticeShown = false;
+let autoRetrainBlocked = false;
 
 const idleTrainState: TrainState = {
   phase: "idle",
@@ -790,6 +804,146 @@ export const useStore = create<State>((set, get) => {
     return parsed.labelIds;
   };
 
+  /** Drops all model objects that were created on the failed backend. */
+  const clearLiveModels = () => {
+    head?.dispose();
+    head = null;
+    detector?.model.dispose();
+    detector = null;
+  };
+
+  /**
+   * Rebuilds the persisted model after a backend change. A model object owns
+   * backend-specific variables, so keeping the old JavaScript object after a
+   * WebGL context failure would only move the failure to the next prediction.
+   */
+  const restoreSavedModel = async (
+    path: string,
+    manifest: ProjectManifest,
+  ): Promise<boolean> => {
+    if (!manifest.model) {
+      set({ hasModel: false, modelLabelIds: [], stale: false });
+      return false;
+    }
+
+    if (manifest.mode === "detect") {
+      const text = await storage.readDetector(path);
+      if (!text) {
+        set({ hasModel: false, modelLabelIds: [], stale: true });
+        return false;
+      }
+      const parsed = JSON.parse(text) as StoredDetector;
+      if (!canRestoreModel(manifest, "detect", parsed.labelIds)) {
+        set({ hasModel: false, modelLabelIds: [], stale: true });
+        return false;
+      }
+      await loadDetectFeatureModel();
+      const restored = deserializeDetector(parsed);
+      if (!restored) {
+        set({ hasModel: false, modelLabelIds: [], stale: true });
+        return false;
+      }
+      detector = restored;
+      set({
+        hasModel: true,
+        stale: Boolean(manifest.modelStale),
+        modelLabelIds: parsed.labelIds,
+      });
+      return true;
+    }
+
+    const text = await storage.readModel(path);
+    if (!text) {
+      set({ hasModel: false, modelLabelIds: [], stale: true });
+      return false;
+    }
+    const parsed = JSON.parse(text) as StoredHead;
+    const storedMode: ProjectMode = parsed.mode === "multi" ? "multi" : "single";
+    if (!canRestoreModel(manifest, storedMode, parsed.labelIds)) {
+      set({ hasModel: false, modelLabelIds: [], stale: true });
+      return false;
+    }
+    await loadFeatureModel();
+    const restored = deserializeHead(parsed, manifest.settings);
+    if (!restored) {
+      set({ hasModel: false, modelLabelIds: [], stale: true });
+      return false;
+    }
+    head = restored;
+    set({
+      hasModel: true,
+      stale: Boolean(manifest.modelStale),
+      modelLabelIds: parsed.labelIds,
+    });
+    return true;
+  };
+
+  /**
+   * Switches the session to WASM after a genuine WebGL shader or context
+   * failure, then rebuilds all persisted model state. The promise is shared so
+   * concurrent callers cannot switch backends or show several notices.
+   */
+  const recoverGpu = async (path: string, manifest: ProjectManifest): Promise<boolean> => {
+    if (gpuRecoveryFailed) return false;
+    if (gpuRecovery) return gpuRecovery;
+
+    gpuRecovery = (async () => {
+      try {
+        clearLiveModels();
+        resetFeatureModels();
+        const backend = await switchToWasm();
+        set({ backend });
+        await restoreSavedModel(path, manifest);
+        if (!gpuFallbackNoticeShown) {
+          gpuFallbackNoticeShown = true;
+          get().toast(
+            "GPU acceleration failed, so Belo switched to CPU compatibility mode. Training may be slower.",
+            "info",
+          );
+        }
+        return true;
+      } catch (err) {
+        gpuRecoveryFailed = true;
+        autoRetrainBlocked = true;
+        set({ backend: currentBackend() === "wasm" ? "wasm" : null, hasModel: false, modelLabelIds: [] });
+        if (!gpuFallbackNoticeShown) {
+          gpuFallbackNoticeShown = true;
+          get().toast(
+            `GPU acceleration failed and CPU compatibility mode could not start: ${errorText(err)}`,
+            "bad",
+          );
+        }
+        return false;
+      } finally {
+        gpuRecovery = null;
+      }
+    })();
+    return gpuRecovery;
+  };
+
+  /** One inference retry, inside the same exclusive gate as the failed pass. */
+  const runInference = async <T>(
+    path: string,
+    manifest: ProjectManifest,
+    operation: () => Promise<T>,
+  ): Promise<T | null> => {
+    try {
+      return await operation();
+    } catch (err) {
+      if (
+        currentBackend() !== "webgl" ||
+        !isWebglFailure(err) ||
+        currentRun ||
+        get().path !== path
+      ) {
+        throw err;
+      }
+      if (!(await recoverGpu(path, manifest))) return null;
+      if (get().path !== path || currentRun) return null;
+      return operation();
+    }
+  };
+
   /**
    * Copies the model a background run is about to replace into its checkpoint
    * file, and remembers what that model was in the manifest, so the Train view
@@ -1029,9 +1183,29 @@ export const useStore = create<State>((set, get) => {
       }));
       await get().saveNow();
     } catch (err) {
+      if (
+        currentBackend() === "webgl" &&
+        isWebglFailure(err) &&
+        !run.stop &&
+        !run.gpuRecoveryAttempted
+      ) {
+        run.gpuRecoveryAttempted = true;
+        if (await recoverGpu(path, manifest)) {
+          await executeDetectRun(run, manifest, path, auto);
+          return;
+        }
+      }
+      if (isWebglFailure(err) && gpuRecoveryFailed) {
+        if (!auto && get().path === path) {
+          set((s) => ({
+            train: { ...s.train, phase: "error", message: "CPU compatibility mode unavailable" },
+          }));
+        }
+        return;
+      }
       if (auto) {
-        // A cancelled or failed background run is not worth a red banner: the
-        // old detector is still live and the next change tries again.
+        // A cancelled or failed background run is not worth a red banner. The
+        // old detector is still live and a later edit can request another run.
         if (!run.stop) get().toast(`Background retraining stopped: ${errorText(err)}`, "bad");
       } else if (run.stop) {
         if (get().path === path) {
@@ -1053,6 +1227,7 @@ export const useStore = create<State>((set, get) => {
    * live camera beyond the frame yields the fit loop already does.
    */
   const executeRun = async (run: TrainRun): Promise<void> => {
+    if (run.stop) return;
     const manifest = get().manifest;
     const path = get().path;
     if (!manifest || !path) return;
@@ -1200,9 +1375,29 @@ export const useStore = create<State>((set, get) => {
       }));
       await get().saveNow();
     } catch (err) {
+      if (
+        currentBackend() === "webgl" &&
+        isWebglFailure(err) &&
+        !run.stop &&
+        !run.gpuRecoveryAttempted
+      ) {
+        run.gpuRecoveryAttempted = true;
+        if (await recoverGpu(path, manifest)) {
+          await executeRun(run);
+          return;
+        }
+      }
+      if (isWebglFailure(err) && gpuRecoveryFailed) {
+        if (!auto && get().path === path) {
+          set((s) => ({
+            train: { ...s.train, phase: "error", message: "CPU compatibility mode unavailable" },
+          }));
+        }
+        return;
+      }
       if (auto) {
-        // A cancelled or failed background run is not worth a red banner: the
-        // old head is still live and the next correction tries again.
+        // A cancelled or failed background run is not worth a red banner. The
+        // old head is still live and a later edit can request another run.
         if (!run.stop) get().toast(`Background retraining stopped: ${errorText(err)}`, "bad");
         return;
       }
@@ -1220,9 +1415,14 @@ export const useStore = create<State>((set, get) => {
   };
 
   const beginRun = (mode: RunMode): Promise<void> => {
-    const run: TrainRun = { mode, stop: false, done: Promise.resolve() };
+    const run: TrainRun = {
+      mode,
+      stop: false,
+      gpuRecoveryAttempted: false,
+      done: Promise.resolve(),
+    };
     currentRun = run;
-    run.done = executeRun(run).finally(() => {
+    run.done = runMlExclusive(() => executeRun(run)).finally(() => {
       if (currentRun === run) currentRun = null;
       retrain.finished();
     });
@@ -1236,7 +1436,8 @@ export const useStore = create<State>((set, get) => {
    * and is checked in node.
    */
   const retrain = createRetrainScheduler({
-    ready: () => Boolean(get().path) && autoRetrainAllowed(get().manifest, get().hasModel),
+    ready: () =>
+      !autoRetrainBlocked && Boolean(get().path) && autoRetrainAllowed(get().manifest, get().hasModel),
     busy: () => currentRun !== null,
     start: () => {
       void beginRun("auto");
@@ -1330,8 +1531,13 @@ export const useStore = create<State>((set, get) => {
     },
 
     toast(text, tone = "info") {
+      const current = get().toasts;
+      // Identical failures often arrive from several async callers at once.
+      // One notice is enough, and the visible list must stay bounded even when
+      // an external backend keeps rejecting work.
+      if (current.some((item) => item.text === text && item.tone === tone)) return;
       const id = makeId("toast");
-      set({ toasts: [...get().toasts, { id, text, tone }] });
+      set({ toasts: [...current, { id, text, tone }].slice(-4) });
       setTimeout(() => get().dismissToast(id), 4200);
     },
 
@@ -1363,13 +1569,20 @@ export const useStore = create<State>((set, get) => {
     },
 
     async openProject(path) {
+      if (currentRun) {
+        currentRun.stop = true;
+        await currentRun.done;
+      }
+      let recoveryManifest: ProjectManifest | null = null;
       try {
         const text = await storage.readManifest(path);
         const loaded = migrateManifest(JSON.parse(text) as ProjectManifest);
+        recoveryManifest = loaded;
         // Anything dead in model/ goes before the project is shown, so the state
         // the app holds and the files on disk describe the same model.
         const tidied = await tidyModelFiles(path, loaded);
         const manifest = tidied.manifest;
+        recoveryManifest = manifest;
         forgetCaches();
         dropModel();
         set({
@@ -1446,6 +1659,16 @@ export const useStore = create<State>((set, get) => {
         }
         if (get().path === path) set({ hasCheckpoint: await storage.hasCheckpoint(path) });
       } catch (err) {
+        if (
+          recoveryManifest &&
+          currentBackend() === "webgl" &&
+          isWebglFailure(err) &&
+          get().path === path &&
+          (await recoverGpu(path, recoveryManifest))
+        ) {
+          await get().openProject(path);
+          return;
+        }
         get().toast(errorText(err), "bad");
       }
     },
@@ -2028,72 +2251,93 @@ export const useStore = create<State>((set, get) => {
     },
 
     async detectObjects(source, scoreThreshold) {
+      const path = get().path;
       const manifest = get().manifest;
-      if (!manifest || manifest.mode !== "detect" || !detector) return null;
-      const { pack } = await embedDetectFeatures(source);
-      return detectSpatialMap(detector, pack, { scoreThreshold });
+      if (!path || !manifest || manifest.mode !== "detect") return null;
+      return runMlIfIdle(() =>
+        runInference(path, manifest, async () => {
+          const current = get().manifest;
+          if (!current || current.mode !== "detect" || !detector) return null;
+          const { pack } = await embedDetectFeatures(source);
+          return detectSpatialMap(detector, pack, { scoreThreshold });
+        }),
+      );
     },
 
     async proposeBoxes(imageId, scoreThreshold) {
+      const path = get().path;
       const manifest = get().manifest;
-      if (!manifest || manifest.mode !== "detect" || !detector) return null;
-      const record = manifest.images.find((img) => img.id === imageId);
-      if (!record) return null;
-      const pack = await spatialFor(record);
-      // The detector may name a label that has been deleted since the run. A
-      // guess nobody can accept is worse than no guess, so it is dropped here
-      // rather than drawn and then refused by addBox.
-      const known = new Set(manifest.labels.map((label) => label.id));
-      return detectSpatialMap(detector, pack, { scoreThreshold }).filter((box) =>
-        known.has(box.labelId),
+      if (!path || !manifest || manifest.mode !== "detect") return null;
+      return runMlIfIdle(() =>
+        runInference(path, manifest, async () => {
+          const current = get().manifest;
+          if (!current || current.mode !== "detect" || !detector) return null;
+          const record = current.images.find((img) => img.id === imageId);
+          if (!record) return null;
+          const pack = await spatialFor(record);
+          // The detector may name a label that has been deleted since the run.
+          // A guess nobody can accept is worse than no guess, so it is dropped
+          // here rather than drawn and then refused by addBox.
+          const known = new Set(current.labels.map((label) => label.id));
+          return detectSpatialMap(detector, pack, { scoreThreshold }).filter((box) =>
+            known.has(box.labelId),
+          );
+        }),
       );
     },
 
     async predict(source, wantAttention = false) {
+      const path = get().path;
       const manifest = get().manifest;
-      if (!manifest || !head) return null;
-      const labelIds = get().modelLabelIds;
-      const { pooled, spatial } = await embedWithSpatial(source, wantAttention);
-      try {
-        const row = predictOne(head, pooled);
-        if (row.length === 0) return null;
-        let best = 0;
-        row.forEach((value, index) => {
-          if (value > row[best]) best = index;
-        });
+      if (!path || !manifest) return null;
+      return runMlIfIdle(() =>
+        runInference(path, manifest, async () => {
+          const current = get().manifest;
+          if (!current || !head) return null;
+          const labelIds = get().modelLabelIds;
+          const { pooled, spatial } = await embedWithSpatial(source, wantAttention);
+          try {
+            const row = predictOne(head, pooled);
+            if (row.length === 0) return null;
+            let best = 0;
+            row.forEach((value, index) => {
+              if (value > row[best]) best = index;
+            });
 
-        let attention: Attention | null = null;
-        if (spatial && head) {
-          // One batched pass: rows * cols tiny head inferences at once, on the
-          // activation the pooled embedding was already made from.
-          const cellScores = predictCells(head, spatial.cells);
-          // Single mode has one winner worth showing. Multi mode shows every
-          // label that answered yes on this frame.
-          const shown =
-            manifest.mode === "multi"
-              ? labelIds.filter((_, i) => (row[i] ?? 0) >= MULTI_THRESHOLD)
-              : labelIds[best]
-                ? [labelIds[best]]
-                : [];
-          const maps: AttentionMap[] = shown.map((labelId) => {
-            const index = labelIds.indexOf(labelId);
+            let attention: Attention | null = null;
+            if (spatial && head) {
+              // One batched pass: rows * cols tiny head inferences at once, on
+              // the activation the pooled embedding was already made from.
+              const cellScores = predictCells(head, spatial.cells);
+              // Single mode has one winner worth showing. Multi mode shows every
+              // label that answered yes on this frame.
+              const shown =
+                current.mode === "multi"
+                  ? labelIds.filter((_, i) => (row[i] ?? 0) >= MULTI_THRESHOLD)
+                  : labelIds[best]
+                    ? [labelIds[best]]
+                    : [];
+              const maps: AttentionMap[] = shown.map((labelId) => {
+                const index = labelIds.indexOf(labelId);
+                return {
+                  labelId,
+                  values: cellScores.map((cell) => cell[index] ?? 0),
+                };
+              });
+              attention = { rows: spatial.rows, cols: spatial.cols, maps };
+            }
+
             return {
-              labelId,
-              values: cellScores.map((cell) => cell[index] ?? 0),
+              labelId: labelIds[best] ?? "",
+              confidence: row[best] ?? 0,
+              scores: labelIds.map((labelId, i) => ({ labelId, score: row[i] ?? 0 })),
+              attention,
             };
-          });
-          attention = { rows: spatial.rows, cols: spatial.cols, maps };
-        }
-
-        return {
-          labelId: labelIds[best] ?? "",
-          confidence: row[best] ?? 0,
-          scores: labelIds.map((labelId, i) => ({ labelId, score: row[i] ?? 0 })),
-          attention,
-        };
-      } finally {
-        spatial?.cells.dispose();
-      }
+          } finally {
+            spatial?.cells.dispose();
+          }
+        }),
+      );
     },
   };
 });
