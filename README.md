@@ -1245,8 +1245,8 @@ sample every 220 ms, independently of the capture rate.
 
 The release-build synthetic pixel measurement on this M-series Mac is a useful path check,
 not a promise about ScreenCaptureKit or somebody else's display: the old 1280 by 830 q72
-path measured 10.5 ms and 288 KB, Auto's 1120 by 700 q55 path measured 5.4 ms and 279 KB,
-Smooth's 960 by 600 q55 path 3.7 ms and 138 KB, and Balanced's 1440 by 900 q68 path 9.1 ms
+path measured 8.9 ms and 288 KB, Auto's 1120 by 700 q55 path measured 5.4 ms and 279 KB,
+Smooth's 960 by 600 q55 path 3.8 ms and 138 KB, and Balanced's 1440 by 900 q68 path 9.2 ms
 and 556 KB. Those numbers cover BGRA stride conversion plus JPEG encoding only. The native
 packet and the browser harness expose the remaining transfer and decode timings; a real
 ScreenCaptureKit capture still needs the manual smoke pass below. At 60 frames per second,
