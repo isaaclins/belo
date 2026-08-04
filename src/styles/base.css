@@ -38,6 +38,7 @@ body {
 /* The app is a desktop shell, so no page-level text selection or drag noise. */
 body {
   user-select: none;
+  -webkit-user-select: none;
   cursor: default;
   touch-action: manipulation;
 }
@@ -45,8 +46,10 @@ body {
 input,
 textarea,
 [contenteditable="true"],
+[contenteditable="plaintext-only"],
 .selectable {
   user-select: text;
+  -webkit-user-select: text;
 }
 
 h1,

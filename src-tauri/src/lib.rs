@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod screen;
+mod snip;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -679,9 +680,18 @@ mod tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    // The capture hotkey and the notification that answers it are macOS-only
+    // until another platform has a clean background region picker.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_notification::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             default_projects_dir,
             create_project,
@@ -718,7 +728,9 @@ pub fn run() {
             screen::screen_displays,
             screen::screen_start,
             screen::screen_stop,
-            screen::screen_open_settings
+            screen::screen_open_settings,
+            snip::snip_supported,
+            snip::snip_region
         ])
         .run(tauri::generate_context!())
         .expect("error while running Belo");

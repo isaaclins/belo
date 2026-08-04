@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 const STEPS = [
   ["typecheck", "the TypeScript source still typechecks"],
   ["check:gpu-recovery", "a shader-link failure falls back once and recovers"],
+  ["check:selection", "Cmd/Ctrl+A follows the active image collection without stealing text editing"],
+  ["check:snip", "the macOS region shortcut imports, cancels, notifies and unregisters safely"],
   ["check:boxes", "boxes survive drawing, saving and loading"],
   ["check:detect", "the detection layer decides the way it should"],
   ["check:curve", "a loss curve is read into the right epoch and the right words"],

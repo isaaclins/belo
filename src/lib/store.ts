@@ -83,7 +83,7 @@ import {
   type TrainProgress,
 } from "./ml/classifier";
 
-export const APP_VERSION = "0.8.0";
+export const APP_VERSION = "0.10.0";
 
 export type View = "label" | "train" | "use";
 
@@ -208,6 +208,10 @@ interface State {
   modelLabelIds: string[];
   /** True while a debounced background retrain is running. */
   autoRetraining: boolean;
+  /** True while an automatic retrain is waiting for its debounce or a run. */
+  retrainPending: boolean;
+  /** True while a project close is saving and shortcut callbacks must no-op. */
+  closingProject: boolean;
   /** True when model/head.prev.json holds a head the user can go back to. */
   hasCheckpoint: boolean;
   /** True while a model export is being built or written. */
@@ -249,6 +253,17 @@ interface State {
     origin: ImageSource,
     /** Which live feed the frame came from. Omitted for imports and stills. */
     feed?: LiveFeed,
+    /** Screen snips use the same intake but also request the normal auto run. */
+    scheduleRetrain?: boolean,
+  ) => Promise<boolean>;
+  /** Imports base64 image bytes through the same normalization and manifest path. */
+  addFromBase64: (
+    data: string,
+    mime: string,
+    labels: string | string[] | null,
+    origin: ImageSource,
+    feed?: LiveFeed,
+    scheduleRetrain?: boolean,
   ) => Promise<boolean>;
   moveImages: (imageIds: string[], labelId: string | null) => void;
   /** Train view: relabels a scored image to what the model read and refreshes the results. */
@@ -471,7 +486,7 @@ export const useStore = create<State>((set, get) => {
     head = null;
     detector?.model.dispose();
     detector = null;
-    set({ hasModel: false, modelLabelIds: [], stale: false });
+    set({ hasModel: false, modelLabelIds: [], stale: false, retrainPending: false });
   };
 
   const forgetCaches = () => {
@@ -609,7 +624,7 @@ export const useStore = create<State>((set, get) => {
     // itself is the trigger: a box drawn, moved, retagged, removed or undone,
     // and pictures added or deleted. Classify projects keep scheduling from
     // the Use view instead, where a correction is an explicit act.
-    if (get().manifest?.mode === "detect") retrain.schedule();
+    if (get().manifest?.mode === "detect") scheduleAutoRetrain();
   };
 
   /** Loads and caches the embedding for one stored image. */
@@ -1425,6 +1440,7 @@ export const useStore = create<State>((set, get) => {
     run.done = runMlExclusive(() => executeRun(run)).finally(() => {
       if (currentRun === run) currentRun = null;
       retrain.finished();
+      set({ retrainPending: retrain.pending() || retrain.queued() });
     });
     return run.done;
   };
@@ -1440,9 +1456,15 @@ export const useStore = create<State>((set, get) => {
       !autoRetrainBlocked && Boolean(get().path) && autoRetrainAllowed(get().manifest, get().hasModel),
     busy: () => currentRun !== null,
     start: () => {
+      set({ retrainPending: false });
       void beginRun("auto");
     },
   });
+
+  const scheduleAutoRetrain = () => {
+    retrain.schedule();
+    set({ retrainPending: retrain.pending() || retrain.queued() });
+  };
 
   const writeImageRecord = async (
     jpegBase64: string,
@@ -1473,6 +1495,33 @@ export const useStore = create<State>((set, get) => {
     return mode === "detect" ? { ...labelled, boxes: [] } : labelled;
   };
 
+  const addNormalizedImage = async (
+    jpegBase64: string,
+    labels: string | string[] | null,
+    origin: ImageSource,
+    feed: LiveFeed | undefined,
+    scheduleRetrain: boolean,
+  ): Promise<boolean> => {
+    const path = get().path;
+    if (!get().manifest || !path) return false;
+    try {
+      const record = await writeImageRecord(jpegBase64, labels, origin, feed);
+      // A close can finish while an image is being decoded or written. Remove
+      // that file and leave the next project completely untouched.
+      if (get().path !== path || !get().manifest) {
+        await storage.deleteImages(path, [record.file]);
+        return false;
+      }
+      touch({ images: [...get().manifest!.images, record] });
+      markStale();
+      if (scheduleRetrain || origin === "feedback") scheduleAutoRetrain();
+      return true;
+    } catch (err) {
+      get().toast(errorText(err), "bad");
+      return false;
+    }
+  };
+
   return {
     booted: false,
     backend: null,
@@ -1491,6 +1540,8 @@ export const useStore = create<State>((set, get) => {
     stale: false,
     modelLabelIds: [],
     autoRetraining: false,
+    retrainPending: false,
+    closingProject: false,
     hasCheckpoint: false,
     exporting: false,
     attentionOn: false,
@@ -1560,6 +1611,7 @@ export const useStore = create<State>((set, get) => {
           activeLabelId: null,
           train: idleTrainState,
           hasCheckpoint: false,
+          closingProject: false,
         });
         await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
@@ -1593,6 +1645,7 @@ export const useStore = create<State>((set, get) => {
           activeLabelId: manifest.labels[0]?.id ?? null,
           train: idleTrainState,
           hasCheckpoint: false,
+          closingProject: false,
         });
         await storage.rememberProject(path, manifest.name);
         await get().refreshRecents();
@@ -1683,30 +1736,36 @@ export const useStore = create<State>((set, get) => {
     },
 
     async closeProject() {
-      if (currentRun) {
-        currentRun.stop = true;
-        await currentRun.done;
-      }
-      if (get().dirty) {
-        await get().saveNow();
-        if (get().dirty) {
-          get().toast("The project could not be saved, so it was left open", "bad");
-          return;
+      if (!get().path || get().closingProject) return;
+      set({ closingProject: true, retrainPending: false });
+      try {
+        if (currentRun) {
+          currentRun.stop = true;
+          await currentRun.done;
         }
+        if (get().dirty) {
+          await get().saveNow();
+          if (get().dirty) {
+            get().toast("The project could not be saved, so it was left open", "bad");
+            return;
+          }
+        }
+        if (saveTimer) clearTimeout(saveTimer);
+        forgetCaches();
+        dropModel();
+        set({
+          path: null,
+          manifest: null,
+          dirty: false,
+          activeLabelId: null,
+          train: idleTrainState,
+          view: "label",
+          hasCheckpoint: false,
+        });
+        void get().refreshRecents();
+      } finally {
+        set({ closingProject: false, retrainPending: false });
       }
-      if (saveTimer) clearTimeout(saveTimer);
-      forgetCaches();
-      dropModel();
-      set({
-        path: null,
-        manifest: null,
-        dirty: false,
-        activeLabelId: null,
-        train: idleTrainState,
-        view: "label",
-        hasCheckpoint: false,
-      });
-      void get().refreshRecents();
     },
 
     async forgetProject(path) {
@@ -2004,23 +2063,22 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    async addFromDrawable(source, labels, origin, feed) {
-      const manifest = get().manifest;
-      const path = get().path;
-      if (!manifest || !path) return false;
+    async addFromDrawable(source, labels, origin, feed, scheduleRetrain = false) {
+      if (!get().manifest || !get().path) return false;
       try {
         const jpeg = normalizeToJpegBase64(source);
-        const record = await writeImageRecord(jpeg, labels, origin, feed);
-        if (get().path !== path) {
-          await storage.deleteImages(path, [record.file]);
-          return false;
-        }
-        touch({ images: [...get().manifest!.images, record] });
-        markStale();
-        // Corrections from the Use view fold themselves in without a trip to
-        // the Train view, once the taps stop coming.
-        if (origin === "feedback") retrain.schedule();
-        return true;
+        return await addNormalizedImage(jpeg, labels, origin, feed, scheduleRetrain);
+      } catch (err) {
+        get().toast(errorText(err), "bad");
+        return false;
+      }
+    },
+
+    async addFromBase64(data, mime, labels, origin, feed, scheduleRetrain = false) {
+      if (!get().manifest || !get().path) return false;
+      try {
+        const jpeg = await base64ToJpegBase64(data, mime);
+        return await addNormalizedImage(jpeg, labels, origin, feed, scheduleRetrain);
       } catch (err) {
         get().toast(errorText(err), "bad");
         return false;
@@ -2075,7 +2133,7 @@ export const useStore = create<State>((set, get) => {
         },
       });
       // Same rule as a Use view correction: one debounced run folds in a burst.
-      retrain.schedule();
+      scheduleAutoRetrain();
     },
 
     toggleImageLabels(imageIds, labelId) {
@@ -2146,6 +2204,7 @@ export const useStore = create<State>((set, get) => {
       if (!path || !manifest) return;
       const detectMode = manifest.mode === "detect";
       retrain.cancel();
+      set({ retrainPending: false });
       try {
         const text = detectMode
           ? await storage.readDetectorCheckpoint(path)

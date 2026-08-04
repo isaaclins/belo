@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "packageManager": "npm@11.11.0",
   "description": "Local image classifier trainer",
   "scripts": {
@@ -24,7 +24,9 @@
     "check:propose": "node scripts/check-propose.mjs",
     "check:camera-live": "node scripts/check-camera-live.mjs",
     "check:screen": "node scripts/check-screen.mjs",
-    "check:export": "node scripts/check-export.mjs"
+    "check:export": "node scripts/check-export.mjs",
+    "check:selection": "node scripts/check-selection.mjs",
+    "check:snip": "node scripts/check-snip.mjs"
   },
   "repository": {
     "type": "git",
@@ -38,6 +40,8 @@
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.2",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
     "react": "^19.2.8",

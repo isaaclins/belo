@@ -106,6 +106,10 @@ const commands: Record<string, (args: Args) => unknown> = {
 
   read_file_base64: ({ path }: Args) => must(files, String(path), "file"),
   list_images_in_dir: () => [],
+  // Other browser harnesses render the real App but must not register a native
+  // shortcut. The dedicated snip harness injects its own runtime seam.
+  snip_supported: () => false,
+  snip_region: () => null,
 };
 
 /** Where the fake save dialog says the next export should go. */

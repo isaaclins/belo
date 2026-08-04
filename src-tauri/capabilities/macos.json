@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/macOS-schema.json",
+  "identifier": "macos-screen-snip",
+  "description": "Allow the macOS screen-region shortcut and the notification that confirms a background capture.",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "permissions": [
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify"
+  ]
+}

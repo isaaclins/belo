@@ -67,6 +67,14 @@ detect projects show their detector's actual boxes instead.
   the settings page where you can turn it back on. Belo starts on the camera every time,
   stopping the screen feed releases it at once, and no screen frame ever leaves your
   device. Phones have no screen source, so the switch does not appear there.
+- **Grab one screen region from anywhere.** On macOS, open a project, choose a label if it
+  is a classification project, and press **Cmd+Shift+B**. Drag Apple's crosshair over a
+  region and it lands in the project like a normal capture, marked as a screen frame and
+  queued for the usual background retrain. Press **Esc** to cancel. Detect projects keep
+  the new picture unboxed so Belo's existing assisted proposals can suggest boxes later.
+  The shortcut is shown in the project header, is removed when the project closes, and a
+  background capture gets a native notification with the project name and count. Windows
+  and Linux do not offer this shortcut yet.
 - **See classification clues.** Turn on **Show attention** for a colored hint showing
   which parts of the picture influenced each classification answer.
 - **Give one picture several labels.** For example, the same picture can be both
@@ -145,7 +153,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.9.0**. Desktop, iOS and Android all build.
+Current app version: **0.10.0**. Desktop, iOS and Android all build. The screen-region shortcut is macOS-only.
 
 ## Detailed workflow
 
@@ -512,7 +520,7 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.9.0",
+  "appVersion": "0.10.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -648,7 +656,7 @@ npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
 ```
 
-Release verification. `npm test` runs all eleven in this order and prints how long each one
+Release verification. `npm test` runs all fifteen in this order and prints how long each one
 took, which is exactly what CI does:
 
 ```bash
@@ -656,6 +664,8 @@ npm run check:boxes       # manifest v3 and one-finger box geometry
 npm run check:detect      # anchors, loss inputs, decoding, scoring and flip geometry
 npm run check:curve       # which epoch a run keeps and what it tells you afterwards
 npm run check:store       # model files, saves, retrain policy, checkpoint, undo, summaries
+npm run check:selection   # Cmd/Ctrl+A follows the visible collection without editing surprises
+npm run check:snip        # shortcut capture, cancel, notification and close race with fixtures
 npm run check:camera      # camera seam against a mocked MediaDevices
 npm run check:camera-live # a real camera session in headless Chrome, with fake devices
 npm run check:screen      # the screen source, driven against a synthetic desktop
@@ -665,10 +675,11 @@ npm run check:export      # an exported model, unzipped and run outside Belo
 npm run check:learning    # learning proof plus the exact Use inference path
 ```
 
-The five browser checks drive headless Chrome over the DevTools protocol. They never take
-over the screen, they serve the app on a free port that is never 1420, and they report
-`skipped` instead of failing on a machine with no Chrome, which is why CI stays green
-without one. `CHROME_PATH` picks a specific browser. `check:export` additionally needs the
+The headless browser checks drive Chrome over the DevTools protocol. They never take over
+the screen, they serve the app on a free port that is never 1420, and they report `skipped`
+instead of failing on a machine with no Chrome, which is why CI stays green without one.
+The screen-region check uses fixture bytes and a fake native runner; it never executes
+`screencapture`. `CHROME_PATH` picks a specific browser. `check:export` additionally needs the
 network, because the page it exports loads TensorFlow.js from a pinned CDN URL the way any
 exported folder does, and it skips with a message when that URL is unreachable.
 
@@ -805,8 +816,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.9.0 && git push origin
-v0.9.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.10.0 && git push origin
+v0.10.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -1225,6 +1236,28 @@ that Belo cannot style or a long list of window titles, and a whole display is e
 teaching a model. Windows and Linux enumerate nothing, because `getDisplayMedia` deliberately
 answers with its own picker instead.
 
+### Screen-region shortcut
+
+Belo 0.10.0 adds one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
+registers only for that project and invokes `/usr/bin/screencapture -i -x` with a private
+temporary PNG path. **Esc** leaves no file and no manifest change. A completed region goes
+through the same 224 pixel JPEG intake as every other image, with `source: "capture"` and
+`feed: "screen"`; the active label is used for classification projects, while detect
+projects receive an empty `boxes` list so the existing assisted proposal path can suggest
+boxes later. A trained project requests the ordinary debounced background retrain. If the
+window was backgrounded, the native notification names the project and its new count;
+otherwise the normal Belo toast is used.
+
+The shortcut is unregistered before a project close can finish, and a callback that returns
+from the picker after close is discarded. Windows and Linux do not register it in 0.10.0:
+there is no clean background region-capture path there yet. Phones compile neither the
+shortcut nor notification plugin.
+
+The Rust seam accepts a picker runner, so unit tests cover bytes, cancellation and cleanup
+without executing `screencapture`. The headless frontend check supplies fixture PNG bytes
+and covers the manifest metadata, retrain request, native notification handoff and close
+race.
+
 ### Permission
 
 Screen recording on macOS is TCC gated, with no entitlement that can grant it.
@@ -1272,6 +1305,15 @@ by hand, and so does whatever ScreenCaptureKit costs while it runs:
 5. Press Stop, and confirm the purple indicator goes out at once.
 6. Deny the permission in System Settings and press Screen again: the guidance panel has to
    appear instead of an error, and its button has to open the right settings page.
+7. Open a classification project, choose a label, press **Cmd+Shift+B**, drag a region and
+   confirm the new tile is tagged `screen`, the header still shows **Cmd+Shift+B**, and the
+   normal retrain marker appears. Press **Esc** in the picker and confirm no tile is added.
+8. Background Belo before the next capture and confirm the native notification names the
+   project and the image count. Bring it forward and confirm the next capture uses the Belo
+   toast instead.
+9. Open a detect project and capture a region. Confirm its tile starts with zero boxes so
+   assisted proposals remain available. Close the project, press the shortcut, and confirm
+   no picker opens and no image is added.
 
 ## License
 

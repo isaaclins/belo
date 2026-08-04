@@ -21,6 +21,7 @@ import { storage } from "../lib/storage";
 import { CaptureModal } from "./CaptureModal";
 import { BoxAnnotator } from "./BoxAnnotator";
 import { boxesOf, hasLabel, labelsOf, type ImageRecord, type Label } from "../lib/types";
+import { isSelectAllShortcut, isTextEditingTarget } from "../lib/keyboard";
 
 const UNLABELED = "__unlabeled__";
 
@@ -96,6 +97,24 @@ export function LabelView() {
       .slice()
       .reverse();
   }, [images, bucket, detect]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        !isSelectAllShortcut(event) ||
+        isTextEditingTarget(event.target) ||
+        annotating !== null ||
+        capturing ||
+        confirmDelete
+      ) {
+        return;
+      }
+      event.preventDefault();
+      setSelection(shown.map((image) => image.id));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [annotating, capturing, confirmDelete, shown]);
 
   // The annotator walks the same list the grid shows, so a deletion behind it
   // must not leave it pointing past the end.
