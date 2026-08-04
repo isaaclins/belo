@@ -67,6 +67,17 @@ detect projects show their detector's actual boxes instead.
   the settings page where you can turn it back on. Belo starts on the camera every time,
   stopping the screen feed releases it at once, and no screen frame ever leaves your
   device. Phones have no screen source, so the switch does not appear there.
+- **Tune a live screen.** The small **Auto, Smooth, Balanced, Detail** control is persisted
+  on this device. Auto follows the display mode and Belo measures the native conversion,
+  transfer, decode and inference work, dropping frames and stepping the capture rate down
+  when needed, then recovering after the pipeline settles. Inference still runs on its own
+  cadence, so a fast screen feed does not make the model queue old frames.
+- **Keep a screen verdict beside your work.** When Screen is live and the Belo window is
+  behind another app, the optional always-on-top capture HUD appears. It never captures
+  Belo's own windows, never takes focus, and can be dragged to a remembered position. Use
+  **Freeze** to teach a classification frame or draw and label detection boxes; saving uses
+  the same project intake and retrain path as the main view. The HUD closes when the main
+  window comes forward or the live screen stops, and its **HUD on/off** switch is persisted.
 - **Grab one screen region from anywhere.** On macOS, open a project, choose a label if it
   is a classification project, and press **Cmd+Shift+B**. Drag Apple's crosshair over a
   region and it lands in the project like a normal capture, marked as a screen frame and
@@ -153,7 +164,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.10.0**. Desktop, iOS and Android all build. The screen-region shortcut is macOS-only.
+Current app version: **0.11.0**. Desktop, iOS and Android all build. The native screen feed and capture HUD are macOS-only; the existing web screen seam remains available where the webview provides it.
 
 ## Detailed workflow
 
@@ -185,7 +196,9 @@ Current app version: **0.10.0**. Desktop, iOS and Android all build. The screen-
    keeps teaching frames until you let go, counting up on the button and capping one hold
    at 60 frames. The **Rate** control next to those buttons picks 2, 4, 8 or 12 frames per
    second and drives the Label view burst as well, so the app has one capture speed;
-   frames are dropped rather than queued if the disk cannot keep up. While the camera runs, **Show attention** overlays where the
+   frames are dropped rather than queued if the disk cannot keep up. A live Screen adds
+   the persisted Auto, Smooth, Balanced and Detail control, plus the optional capture HUD.
+   While the camera runs, **Show attention** overlays where the
    evidence for the current call sits: a tinted heat map plus one box per label. In a multi
    label project every label that answered yes gets its own tint and its own box on one
    shared layer, with all the tints painted first and the boxes on top, so a second label's
@@ -196,7 +209,11 @@ Current app version: **0.10.0**. Desktop, iOS and Android all build. The screen-
    every object above the chosen score threshold gets a coloured box, name and score over
    the live video or a dropped image. The threshold choices are 0.2, 0.3, 0.5 and 0.7 and
    the last choice is remembered. A live frame can be saved back to the project without
-   boxes, ready to annotate later in Label.
+   boxes, ready to annotate later in Label. On macOS, when the main window is not focused,
+   the always-on-top capture HUD shows the verdict. Freeze a frame to expose classification
+   teach buttons or the small detection box surface. HUD saves use `source: "feedback"` for
+   classification and `source: "capture"` for detection, with `feed: "screen"` in both cases,
+   so the normal manifest and retrain paths remain the only write path.
 
 4. **Export.** **Export model** packs the current model into one zip, through the native
    save dialog. See [Model export](#model-export).
@@ -520,7 +537,7 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.10.0",
+  "appVersion": "0.11.0",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -656,7 +673,7 @@ npm run tauri build   # produce a platform installer
 cd src-tauri && cargo check
 ```
 
-Release verification. `npm test` runs all fifteen in this order and prints how long each one
+Release verification. `npm test` runs all seventeen in this order and prints how long each one
 took, which is exactly what CI does:
 
 ```bash
@@ -666,9 +683,11 @@ npm run check:curve       # which epoch a run keeps and what it tells you afterw
 npm run check:store       # model files, saves, retrain policy, checkpoint, undo, summaries
 npm run check:selection   # Cmd/Ctrl+A follows the visible collection without editing surprises
 npm run check:snip        # shortcut capture, cancel, notification and close race with fixtures
+npm run check:adaptive    # slow screen pipelines step down and recover
 npm run check:camera      # camera seam against a mocked MediaDevices
 npm run check:camera-live # a real camera session in headless Chrome, with fake devices
 npm run check:screen      # the screen source, driven against a synthetic desktop
+npm run check:hud         # HUD lifecycle, focus safety, freeze, teach and box flows
 npm run check:overlay     # the multi label attention overlay, trained and painted for real
 npm run check:propose     # the annotator's guesses stay guesses until they are kept
 npm run check:export      # an exported model, unzipped and run outside Belo
@@ -679,7 +698,10 @@ The headless browser checks drive Chrome over the DevTools protocol. They never 
 the screen, they serve the app on a free port that is never 1420, and they report `skipped`
 instead of failing on a machine with no Chrome, which is why CI stays green without one.
 The screen-region check uses fixture bytes and a fake native runner; it never executes
-`screencapture`. `CHROME_PATH` picks a specific browser. `check:export` additionally needs the
+`screencapture`. `check:adaptive` drives the rate controller with pure fast, slow and dropped
+frame timings. `check:hud` uses a fake Tauri window and event bridge, so it proves lifecycle,
+focus safety, filter refresh, frozen classification teaching and detection box writes without
+creating a native window. `CHROME_PATH` picks a specific browser. `check:export` additionally needs the
 network, because the page it exports loads TensorFlow.js from a pinned CDN URL the way any
 exported folder does, and it skips with a message when that URL is unreachable.
 
@@ -816,8 +838,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.10.0 && git push origin
-v0.10.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.11.0 && git push origin
+v0.11.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -935,6 +957,7 @@ src/
   components/DetectionOverlay.tsx  detector boxes aligned to live and single-image pixels
   components/CameraPicker.tsx      camera select shown wherever live video runs
   components/ThumbSizePicker.tsx   the four step image grid cell size control
+  components/ScreenQualityPicker.tsx persisted Auto, Smooth, Balanced, Detail control
   lib/
     attention.ts          overlay geometry and thresholding, pure functions
     augment.ts            training time flip and colour jitter plan, pure functions
@@ -950,6 +973,10 @@ src/
     storage.ts            ProjectStorage seam: the only module that talks to Tauri
     capture.ts            CameraSource seam: the only module that calls getUserMedia
     screen.ts             ScreenSource seam: display capture, native or getDisplayMedia
+    screenPacket.ts        native timing header decoding, pure and allocation-light
+    screenQuality.ts       persisted quality presets for live screen capture
+    adaptiveRate.ts        pure slow, fast and dropped-frame rate controller
+    hud.ts                 macOS HUD lifecycle, events, position and focus policy
     store.ts              application store: project, disk writes, feature cache, head
     zoom.ts               kills user page zoom: pinch, double tap and zoom shortcuts
     images.ts             normalization, drag and drop extraction
@@ -963,6 +990,7 @@ src/
                           BoxAnnotator (detect mode box drawing)
                           DetectTrainView (detect mode training and results)
                           DetectUseView (live and single-image detection)
+                          HudView (the separate always-on-top capture window)
   styles/                 tokens, base, ui primitives, app layout
 src-tauri/src/lib.rs      bundle filesystem commands and the recent projects list
 src-tauri/src/screen.rs   ScreenCaptureKit capture and the JPEG frame path, macOS only
@@ -1201,28 +1229,33 @@ by this repository.
 
 ### The frame path
 
-`src-tauri/src/screen.rs` starts a ScreenCaptureKit stream over one display, asking for
-BGRA at ten frames a second and at most 1280 pixels on the long edge. Every frame is
-converted to RGB, JPEG encoded at quality 72 and pushed down a Tauri channel as raw bytes.
-The frontend decodes each JPEG with `createImageBitmap`, paints it into a canvas and hands
+`src-tauri/src/screen.rs` starts a ScreenCaptureKit stream over one display. Auto queries
+that display's current CoreGraphics mode and starts at its usable refresh rate; the named
+quality steps cap the rate and choose a long edge and JPEG quality. Every frame is converted
+to RGB, JPEG encoded and pushed down a raw Tauri channel with a 16 byte timing header. The
+frontend decodes each JPEG with `createImageBitmap`, paints it into a canvas and hands
 `canvas.captureStream()` to the views, which is why nothing above the seam knows the
 difference between a display and a webcam.
 
-That path is not free, and the honest numbers are these. The part Belo adds, the stride
-conversion plus the JPEG encode of one 1280 by 830 frame, measures 6.0 ms on an M series
-laptop against a desktop-like picture and 7.0 ms against pixel noise, which is 6 to 7
-percent of one core at ten frames a second, and produces 57 KB per frame for the desktop
-picture and 319 KB for the noise. Because Tauri's channel only inlines payloads under 1 KB,
-every real frame takes its fetch route: one `eval` on the main thread plus one protocol
-request to collect the bytes. The webview then pays one JPEG decode per frame, and frames
-are dropped rather than queued while a decode is in flight, so a slow machine shows fewer
-frames instead of falling behind. What Apple's own capture costs on top of that has not
-been measured here, because measuring it means recording a real screen. Ten frames a second
-is deliberate: live inference samples the stage every 220 ms, so a faster feed would only be
-discarded. The alternatives, an `IOSurface` handed straight to the compositor or an H.264
-stream, would both need a video element fed by something WKWebView cannot be given from
-Rust, and neither is worth its complexity for a stage that is squared to 224 pixels before
-anything looks at it.
+The frame controller measures native conversion plus encoding, wall-clock transfer,
+`createImageBitmap` decode, canvas paint and the most recent inference pass. Three slow
+observations or a dropped-frame streak steps down through the available rates; ten fast
+observations step back up. There is no frame queue. The live classifier and detector still
+sample every 220 ms, independently of the capture rate.
+
+The release-build synthetic pixel measurement on this M-series Mac is a useful path check,
+not a promise about ScreenCaptureKit or somebody else's display: the old 1280 by 830 q72
+path measured 10.5 ms and 288 KB, Auto's 1120 by 700 q55 path measured 5.4 ms and 279 KB,
+Smooth's 960 by 600 q55 path 3.7 ms and 138 KB, and Balanced's 1440 by 900 q68 path 9.1 ms
+and 556 KB. Those numbers cover BGRA stride conversion plus JPEG encoding only. The native
+packet and the browser harness expose the remaining transfer and decode timings; a real
+ScreenCaptureKit capture still needs the manual smoke pass below. At 60 frames per second,
+5.4 ms of native work would be about 32 percent of one core before the adaptive controller
+accounts for the webview and inference, while the old path at ten frames per second was
+about 11 percent. The alternatives, an `IOSurface` handed straight to the compositor or an
+H.264 stream, would both need a video element fed by something WKWebView cannot be given
+from Rust, and neither is worth its complexity for a stage that is squared to 224 pixels
+before anything looks at it.
 
 ScreenCaptureKit arrived in macOS 12.3 and Belo's declared minimum is 10.15, so the
 classes are looked up before anything is offered: an Objective C message to a class that
@@ -1236,11 +1269,32 @@ that Belo cannot style or a long list of window titles, and a whole display is e
 teaching a model. Windows and Linux enumerate nothing, because `getDisplayMedia` deliberately
 answers with its own picker instead.
 
+### Capture HUD and window exclusion
+
+The HUD is a second Tauri `WebviewWindow` loaded with `index.html?belo-hud=1`. The main
+window owns the live stream and the project store; it sends compact verdict state to the
+HUD over Tauri events and receives freeze, teach, resume and box commands back. This keeps
+all writes in `addFromDrawable` and `addBox`, so a frozen classification frame is a
+`feedback` screen image and a frozen detection frame is a `capture` screen image with the
+same retrain debounce as the main view. The HUD is created only on macOS when Screen is
+live, the main window is unfocused and the persisted HUD switch is on. It is frameless,
+always on top, non-focusable, draggable and position-persisted. Main focus or stopping the
+feed destroys it.
+
+ScreenCaptureKit's display filter is built with `initWithDisplay:excludingWindows:`. Before
+start, and again after the HUD is shown, Belo enumerates `SCWindow` objects and excludes
+every window whose owning application bundle id is `app.belo`, covering both the main
+window and the HUD. The Rust test `the_capture_filter_excludes_belo_windows_by_bundle_id`
+pins that rule, and the HUD harness refuses to show a HUD if the native filter refresh
+fails. That is the honest boundary: if macOS ever cannot return the app's own window
+objects, the HUD stays closed instead of shipping a feedback loop.
+
 ### Screen-region shortcut
 
-Belo 0.10.0 adds one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
-registers only for that project and resolves Apple's `screencapture` tool at runtime and invokes it with `-i -x` and a private
-temporary PNG path. **Esc** leaves no file and no manifest change. A completed region goes
+Belo 0.11.0 keeps one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
+registers only for that project, resolves Apple's `screencapture` executable at runtime,
+and invokes it with `-i -x` and a private temporary PNG path. **Esc** leaves no file and no
+manifest change. A completed region goes
 through the same 224 pixel JPEG intake as every other image, with `source: "capture"` and
 `feed: "screen"`; the active label is used for classification projects, while detect
 projects receive an empty `boxes` list so the existing assisted proposal path can suggest
@@ -1249,7 +1303,7 @@ window was backgrounded, the native notification names the project and its new c
 otherwise the normal Belo toast is used.
 
 The shortcut is unregistered before a project close can finish, and a callback that returns
-from the picker after close is discarded. Windows and Linux do not register it in 0.10.0:
+from the picker after close is discarded. Windows and Linux do not register it in 0.11.0:
 there is no clean background region-capture path there yet. Phones compile neither the
 shortcut nor notification plugin.
 
@@ -1299,7 +1353,9 @@ by hand, and so does whatever ScreenCaptureKit costs while it runs:
 1. `npm run tauri dev`, open any trained project and go to Use.
 2. Press **Screen**. Grant the permission when macOS asks, then press Try again.
 3. Check that the stage shows the display, that the purple recording indicator is lit, and
-   that the predictions follow what you put on screen.
+   that the predictions follow what you put on screen. Try **Auto**, **Smooth**, **Balanced**
+   and **Detail** while live; the header should show the achieved rate and the stage should
+   restart without changing the inference cadence.
 4. With two displays connected, switch between them in the picker and confirm the stage
    follows.
 5. Press Stop, and confirm the purple indicator goes out at once.
@@ -1314,6 +1370,19 @@ by hand, and so does whatever ScreenCaptureKit costs while it runs:
 9. Open a detect project and capture a region. Confirm its tile starts with zero boxes so
    assisted proposals remain available. Close the project, press the shortcut, and confirm
    no picker opens and no image is added.
+10. With Screen still live, leave the Belo window unfocused with another app in front. The
+    compact always-on-top HUD should appear without activating Belo. Drag its dark header,
+    bring Belo forward and confirm the HUD closes, then unfocus Belo again and confirm it
+    returns at the remembered position. Turn **HUD off**, unfocus and confirm it stays hidden.
+11. In a classification project, press **Freeze** in the HUD. Confirm the image stops, the
+    **This is X** controls appear, and teaching one label adds a feedback image with
+    `feed: "screen"` and starts the normal retrain marker. Resume and confirm the live frame
+    moves again.
+12. In a detect project, freeze the HUD, choose a label, drag a box over the frozen image and
+    confirm the saved capture has `source: "capture"`, `feed: "screen"` and one stored box.
+13. Put the HUD over a visible part of the display and confirm the main Screen stage never
+    shows the Belo window or HUD. If it does, stop and report that the ScreenCaptureKit
+    exclusion is not working rather than using the HUD.
 
 ## License
 
