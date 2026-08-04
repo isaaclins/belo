@@ -26,6 +26,7 @@ import "../../src/styles/ui.css";
 import "../../src/styles/app.css";
 
 installTauriShim();
+Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
 const { check, fail, finish } = reporter();
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -207,6 +208,9 @@ function LifecycleHarness({ runtime }: { runtime: ReturnType<typeof makeRuntime>
 }
 
 async function main(): Promise<void> {
+  // The HUD is macOS-only, but this browser check runs on Linux CI too. Keep
+  // the platform gate real in production and emulate only the browser signal.
+  Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
   setScreenSource(fakeScreen);
   const runtime = makeRuntime();
   setHudRuntimeForTests(runtime as never);
