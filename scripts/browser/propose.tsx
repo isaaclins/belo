@@ -450,7 +450,11 @@ async function main() {
   );
   const firstPicture = useStore.getState().manifest!.images[0].id;
   const boxesBeforeAsking = boxCount(firstPicture);
-  document.querySelector<HTMLButtonElement>("[data-suggest-again]")?.click();
+  const suggestAgain = await until("the suggest-again control", () => {
+    const button = document.querySelector<HTMLButtonElement>("[data-suggest-again]");
+    return button && !button.disabled ? button : null;
+  });
+  suggestAgain.click();
   const askedFor = await until("the guesses asked for explicitly", () => {
     const nodes = guessNodes();
     return nodes.length > 0 ? nodes.length : null;
