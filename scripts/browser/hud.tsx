@@ -109,6 +109,7 @@ function makeRuntime() {
       main.focused = value;
       for (const handler of focusListeners) handler(value);
     },
+    focusListenerCount: () => focusListeners.size,
     dispatch,
     metrics,
   };
@@ -212,6 +213,7 @@ async function main(): Promise<void> {
   let root = createRoot(document.getElementById("mount")!);
   root.render(<LifecycleHarness runtime={runtime} />);
   await until("the lifecycle harness", () => Boolean((window as unknown as { hud?: unknown }).hud));
+  await until("the main focus listener", () => runtime.focusListenerCount() > 0);
   await wait(80);
 
   check("HUD stays closed while the main window is focused", runtime.metrics.created === 0);
