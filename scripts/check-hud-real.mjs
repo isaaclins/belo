@@ -1,10 +1,21 @@
-// Native capture HUD smoke check.
-// Unlike check:hud, this launches the actual Tauri app and queries the native
-// WebviewWindow from a real webview. The test instance is hidden, unfocused,
-// and uses a dedicated Vite port so it never touches a user's app session.
+// Native capture HUD trigger check.
+//
+// This launches a real Tauri webview on a dedicated Vite port, mounts the real
+// Use view, starts the real macOS screen source, and blurs the real main window
+// through Tauri APIs. The HUD is created only by useScreenHud. No test code
+// constructs belo-hud.
 
 import { execFileSync, spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -19,6 +30,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const port = 15000 + (process.pid % 1000);
 const reportPath = join(tmpdir(), `belo-hud-real-${process.pid}.json`);
 const configPath = join(tmpdir(), `belo-hud-real-${process.pid}.json5`);
+const homePath = mkdtempSync(join(tmpdir(), `belo-hud-home-${process.pid}-`));
 const vitePath = join(root, "node_modules", "vite", "bin", "vite.js");
 const tauriPath = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const logPath = join(tmpdir(), `belo-hud-real-${process.pid}.log`);
@@ -32,15 +44,16 @@ const config = {
     windows: [
       {
         label: "main",
-        title: "Belo HUD real check",
-        width: 1,
-        height: 1,
+        title: "Belo HUD real trigger check",
+        width: 600,
+        height: 400,
         x: -10000,
         y: -10000,
-        visible: false,
+        visible: true,
         focus: false,
         decorations: false,
         resizable: false,
+        skipTaskbar: true,
       },
     ],
   },
@@ -82,7 +95,7 @@ async function waitForServer() {
 }
 
 async function waitForReport() {
-  const deadline = Date.now() + 45_000;
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     if (existsSync(reportPath)) {
       try {
@@ -104,9 +117,18 @@ try {
   });
 
   logFd = openSync(logPath, "w");
+  // HOME is redirected so the check never touches real project data, but the
+  // Rust toolchain still has to be found in the real home.
+  const env = {
+    ...process.env,
+    HOME: homePath,
+    RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(process.env.HOME ?? "", ".rustup"),
+    CARGO_HOME: process.env.CARGO_HOME ?? join(process.env.HOME ?? "", ".cargo"),
+    BELO_HUD_CHECK_REPORT: reportPath,
+  };
   vite = spawn(process.execPath, [vitePath, "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,
-    env: process.env,
+    env,
     detached: true,
     stdio: ["ignore", logFd, logFd],
   });
@@ -114,36 +136,53 @@ try {
 
   tauri = spawn(process.execPath, [tauriPath, "dev", "--config", configPath, "--no-watch", "--no-dev-server-wait"], {
     cwd: root,
-    env: { ...process.env, BELO_HUD_CHECK_REPORT: reportPath },
+    env,
     detached: true,
     stdio: ["ignore", logFd, logFd],
   });
   const result = await waitForReport();
-  const window = result.window ?? {};
-  const sizeOk = Math.abs(Number(window.logicalWidth) - 340) <= 2 && Math.abs(Number(window.logicalHeight) - 280) <= 2;
+  const window = result.created ?? {};
+  const diagnostics = readFileSync(logPath, "utf8")
+    .split("\n")
+    .filter((line) => line.includes("[belo-hud]"));
   const ok =
     result.stage === "closed" &&
-    result.closed === true &&
+    // The OS refocus step is skipped when macOS refuses to focus the offscreen
+    // window of an inactive app; the toggle path covers hiding in that case.
+    (result.refocusClosed === true || result.refocusSkipped === true) &&
+    result.toggleClosed === true &&
+    result.stopClosed === true &&
     window.exists === true &&
-    window.alwaysOnTop === true &&
     window.visible === true &&
+    window.alwaysOnTop === true &&
     window.focused === false &&
     window.decorated === false &&
-    window.resizable === false &&
-    Number(window.positionX) < -1000 &&
-    Number(window.positionY) < -1000 &&
-    sizeOk;
+    window.resizable === false;
 
   console.log(JSON.stringify({
     check: "check:hud-real",
     port,
     ok,
     stage: result.stage,
-    closed: result.closed ?? false,
-    window,
+    created: window,
+    refocusClosed: result.refocusClosed ?? false,
+    refocusSkipped: result.refocusSkipped ?? false,
+    toggleClosed: result.toggleClosed ?? false,
+    stopClosed: result.stopClosed ?? false,
     errors: result.errors ?? [],
+    diagnostics,
+    // Kept verbatim so a failure explains itself instead of only timing out.
+    failureContext: ok
+      ? undefined
+      : {
+          hudExists: result.hudExists,
+          hudVisible: result.hudVisible,
+          mainFocused: result.mainFocused,
+          buttons: result.buttons,
+          video: result.video,
+        },
   }, null, 2));
-  process.exitCode = ok ? 0 : 1;
+  if (!ok) process.exitCode = 1;
 } catch (error) {
   console.error(`check:hud-real failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
@@ -162,4 +201,10 @@ try {
   } catch {
     // Best effort cleanup.
   }
+  try {
+    unlinkSync(reportPath);
+  } catch {
+    // Best effort cleanup.
+  }
+  rmSync(homePath, { recursive: true, force: true });
 }

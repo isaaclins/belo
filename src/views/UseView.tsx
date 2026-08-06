@@ -457,6 +457,7 @@ export function UseView() {
     eligible: Boolean(live && source === "screen" && status === "live" && manifest),
     state: hudState,
     onCommand: onHudCommand,
+    onError: (message) => toast(`The capture HUD could not open: ${message}`, "bad"),
   });
   hudToggleRef.current = hud.setEnabled;
 

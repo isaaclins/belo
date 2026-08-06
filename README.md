@@ -164,7 +164,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.11.1**. Desktop, iOS and Android all build. The native screen feed and capture HUD are macOS-only; the existing web screen seam remains available where the webview provides it.
+Current app version: **0.11.2**. Desktop, iOS and Android all build. The native screen feed and capture HUD are macOS-only; the existing web screen seam remains available where the webview provides it.
 
 ## Detailed workflow
 
@@ -537,7 +537,7 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.11.1",
+  "appVersion": "0.11.2",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -838,8 +838,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.11.1 && git push origin
-v0.11.1`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.11.2 && git push origin
+v0.11.2`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -1276,10 +1276,18 @@ window owns the live stream and the project store; it sends compact verdict stat
 HUD over Tauri events and receives freeze, teach, resume and box commands back. This keeps
 all writes in `addFromDrawable` and `addBox`, so a frozen classification frame is a
 `feedback` screen image and a frozen detection frame is a `capture` screen image with the
-same retrain debounce as the main view. The HUD is created only on macOS when Screen is
-live, the main window is unfocused and the persisted HUD switch is on. It is frameless,
-always on top, non-focusable, draggable and position-persisted. Main focus or stopping the
-feed destroys it.
+same retrain debounce as the main view. It is frameless, always on top, non-focusable,
+draggable and position-persisted.
+
+The window is built when the live screen arms, not when focus is lost, and it is kept
+hidden until it is wanted. This ordering is load-bearing. Creating a `WebviewWindow`
+activates the application, so building it on focus loss made macOS refocus the main window
+and immediately hide the HUD that had just been created: the feature destroyed itself and
+reported no error. Focus changes now only show or hide an existing window, a focus gain
+arriving during creation is verified against the real window state before it is trusted,
+and the standing visibility decision is re-applied once the window is ready, so an app that
+is already unfocused still gets a HUD. Turning the switch off or stopping the feed destroys
+the window.
 
 ScreenCaptureKit's display filter is built with `initWithDisplay:excludingWindows:`. Before
 start, and again after the HUD is shown, Belo enumerates `SCWindow` objects and excludes
@@ -1291,7 +1299,7 @@ objects, the HUD stays closed instead of shipping a feedback loop.
 
 ### Screen-region shortcut
 
-Belo 0.11.1 keeps one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
+Belo 0.11.2 keeps one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
 registers only for that project, resolves Apple's `screencapture` executable at runtime,
 and invokes it with `-i -x` and a private temporary PNG path. **Esc** leaves no file and no
 manifest change. A completed region goes
@@ -1303,7 +1311,7 @@ window was backgrounded, the native notification names the project and its new c
 otherwise the normal Belo toast is used.
 
 The shortcut is unregistered before a project close can finish, and a callback that returns
-from the picker after close is discarded. Windows and Linux do not register it in 0.11.1:
+from the picker after close is discarded. Windows and Linux do not register it in 0.11.2:
 there is no clean background region-capture path there yet. Phones compile neither the
 shortcut nor notification plugin.
 
@@ -1348,12 +1356,21 @@ through the actual bindings when the permission happens to be granted already, w
 what proves the objc2 side links and answers.
 
 The native HUD lifecycle is also checked by `npm run check:hud-real`. It starts a hidden,
-unfocused Tauri app on a non-default Vite port, uses the real `WebviewWindow` API, and
-asserts the HUD's existence, 340 by 280 logical size, visibility, always-on-top state,
-frameless state, non-focus state and teardown. It leaves the browser harness in
-`npm run check:hud` unchanged. This check cannot judge pixels, drag feel, or whether the
-HUD visually avoids a user's content, so those still need a human eye in the smoke pass
-below.
+unfocused Tauri app on a non-default Vite port, drives the real Use view onto the real
+screen source, and lets `useScreenHud` build the window: the check never constructs
+`belo-hud` itself. It then asserts that the window really becomes **visible**, at 340 by 280
+logical size, always on top, frameless, unfocused, and that it is destroyed by the HUD
+switch and by stopping the feed.
+
+Asserting visibility rather than existence is the point of this check. Two releases shipped
+a HUD that was constructed and then never shown, and a check that only proved a
+programmatically created window had the right properties passed both times.
+
+macOS only grants focus to a window of the active application, so the refocus-hides-the-HUD
+step is skipped and reported as `refocusSkipped` rather than failing when the platform
+refuses; the HUD switch covers hiding in that case. This check still cannot judge pixels,
+drag feel, or whether the HUD visually avoids a user's content, so those need a human eye
+in the smoke pass below.
 
 What none of that covers is ScreenCaptureKit itself. The native pipe has to be smoke tested
 by hand, and so does whatever ScreenCaptureKit costs while it runs:

@@ -69,6 +69,7 @@ function makeRuntime() {
   const metrics = {
     created: 0,
     shown: 0,
+    hidden: 0,
     destroyed: 0,
     refreshes: 0,
     focusThefts: 0,
@@ -77,6 +78,7 @@ function makeRuntime() {
       destroyed: boolean;
       setAlwaysOnTop: boolean;
       focusable: boolean;
+      visible: boolean;
     } | null,
   };
 
@@ -120,6 +122,7 @@ function makeRuntime() {
       destroyed: false,
       setAlwaysOnTop: false,
       focusable: true,
+      visible: false,
     };
     metrics.window = record;
     return {
@@ -135,7 +138,12 @@ function makeRuntime() {
       },
       async show() {
         metrics.shown += 1;
+        record.visible = true;
         if (record.focusable) metrics.focusThefts += 1;
+      },
+      async hide() {
+        metrics.hidden += 1;
+        record.visible = false;
       },
       async close() {
         record.destroyed = true;
@@ -224,24 +232,33 @@ async function main(): Promise<void> {
   await until("the main focus listener", () => runtime.focusListenerCount() > 0);
   await wait(80);
 
-  check("HUD stays closed while the main window is focused", runtime.metrics.created === 0);
+  // Creating the webview activates the app, which would immediately refocus the
+  // main window and hide the HUD again. The window is therefore built while
+  // capture arms and kept hidden until focus is actually lost.
+  await until("the HUD window to be prepared", () => runtime.metrics.created === 1);
+  check("the HUD window is prepared while capture is armed", runtime.metrics.created === 1);
+  check("a prepared HUD stays hidden while the main window is focused", runtime.metrics.shown === 0 && runtime.metrics.window?.visible === false);
   check("the pure lifecycle gate requires an unfocused live screen", !shouldShowHud({ eligible: true, focused: true, enabled: true, macDesktop: true }));
 
   runtime.focus(false);
   await until("the HUD to appear", () => runtime.metrics.shown > 0);
-  check("HUD appears only after the main window loses focus", runtime.metrics.created === 1);
+  check("HUD appears only after the main window loses focus", runtime.metrics.window?.visible === true);
+  check("losing focus reuses the prepared window instead of building another", runtime.metrics.created === 1);
   check("HUD is always on top", runtime.metrics.window?.setAlwaysOnTop === true);
   check("HUD is not focusable and never steals focus", runtime.metrics.window?.focusable === false && runtime.metrics.focusThefts === 0);
   check("native filter refresh is requested around HUD visibility", screenRefreshes >= 2, { screenRefreshes });
 
   runtime.focus(true);
-  await until("the HUD to close on main focus", () => runtime.metrics.destroyed === 1);
-  check("main focus closes the HUD", runtime.metrics.window?.destroyed === true);
+  await until("the HUD to hide on main focus", () => runtime.metrics.window?.visible === false);
+  check("main focus hides the HUD without destroying it", runtime.metrics.window?.destroyed === false);
 
   runtime.focus(false);
+  await until("the HUD to return on a second focus loss", () => runtime.metrics.window?.visible === true);
+  check("a second focus loss shows the HUD again", runtime.metrics.shown >= 2 && runtime.metrics.created === 1);
+
   document.getElementById("toggle")?.click();
-  await wait(100);
-  check("manual hide prevents a later HUD appearance", runtime.metrics.created === 1);
+  await until("the HUD to be torn down when switched off", () => runtime.metrics.destroyed === 1);
+  check("turning the HUD off tears the window down", runtime.metrics.window?.destroyed === true);
 
   root.unmount();
   root = createRoot(document.getElementById("mount")!);
