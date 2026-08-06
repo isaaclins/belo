@@ -10,6 +10,7 @@
     "assets": "node scripts/copy-wasm.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
+    "check:version": "node scripts/check-version.mjs",
     "check:camera": "node scripts/check-camera-seam.mjs",
     "check:boxes": "node scripts/check-boxes.mjs",
     "check:detect": "node scripts/check-detect.mjs",

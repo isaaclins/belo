@@ -83,7 +83,9 @@ import {
   type TrainProgress,
 } from "./ml/classifier";
 
-export const APP_VERSION = "0.11.1";
+// Stamped into every manifest and export. scripts/check-version.mjs fails the
+// suite when this drifts from package.json, tauri.conf.json or Cargo.toml.
+export const APP_VERSION = "0.11.2";
 
 export type View = "label" | "train" | "use";
 

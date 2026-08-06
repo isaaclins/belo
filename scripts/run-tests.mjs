@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const STEPS = [
   ["typecheck", "the TypeScript source still typechecks"],
+  ["check:version", "every version string in the repo agrees with package.json"],
   ["check:gpu-recovery", "a shader-link failure falls back once and recovers"],
   ["check:selection", "Cmd/Ctrl+A follows the active image collection without stealing text editing"],
   ["check:snip", "the macOS region shortcut imports, cancels, notifies and unregisters safely"],
