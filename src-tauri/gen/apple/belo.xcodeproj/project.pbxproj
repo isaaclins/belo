@@ -300,6 +300,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.belo;
 				PRODUCT_NAME = "Belo";
 				VALID_ARCHS = arm64;
+				DEVELOPMENT_TEAM = "BHAF4L4726";
 			};
 			name = release;
 		};
@@ -332,6 +333,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.belo;
 				PRODUCT_NAME = "Belo";
 				VALID_ARCHS = arm64;
+				DEVELOPMENT_TEAM = "BHAF4L4726";
 			};
 			name = debug;
 		};
