@@ -540,6 +540,17 @@ fn delete_project(app: tauri::AppHandle, path: String) -> Res<()> {
     forget_project(app, path)
 }
 
+/// Debug-only result sink for the native HUD smoke check. The check runs in a
+/// real Tauri webview, while the report stays outside the app's user folders.
+#[cfg(debug_assertions)]
+#[tauri::command]
+fn hud_real_check_report(report: String) -> Res<()> {
+    let path = std::env::var_os("BELO_HUD_CHECK_REPORT")
+        .map(PathBuf::from)
+        .ok_or_else(|| "BELO_HUD_CHECK_REPORT is not set".to_string())?;
+    fs::write(path, report).map_err(|e| fail("could not write HUD check report", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +733,8 @@ pub fn run() {
             remember_project,
             forget_project,
             delete_project,
+            #[cfg(debug_assertions)]
+            hud_real_check_report,
             screen::screen_supported,
             screen::screen_permission,
             screen::screen_request_permission,

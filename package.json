@@ -1,6 +1,6 @@
 {
   "name": "belo",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "packageManager": "npm@11.11.0",
   "description": "Local image classifier trainer",
   "scripts": {
@@ -28,7 +28,8 @@
     "check:selection": "node scripts/check-selection.mjs",
     "check:snip": "node scripts/check-snip.mjs",
     "check:adaptive": "node scripts/check-adaptive.mjs",
-    "check:hud": "node scripts/check-hud.mjs"
+    "check:hud": "node scripts/check-hud.mjs",
+    "check:hud-real": "node scripts/check-hud-real.mjs"
   },
   "repository": {
     "type": "git",

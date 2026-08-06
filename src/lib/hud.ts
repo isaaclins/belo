@@ -41,6 +41,7 @@ export type HudCommand =
 interface HudWindow {
   isFocused(): Promise<boolean>;
   onFocusChanged(handler: (event: { payload: boolean }) => void): Promise<() => void>;
+  once<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void>;
   show(): Promise<void>;
   close(): Promise<void>;
   destroy?(): Promise<void>;
@@ -158,6 +159,8 @@ class HudManager {
   private runtime: HudRuntime | null = null;
   private window: HudWindow | null = null;
   private unlistenMoved: (() => void) | null = null;
+  private pendingCreation: Promise<void> | null = null;
+  private pendingWindow: HudWindow | null = null;
   private latest: HudState | null = null;
   private generation = 0;
 
@@ -174,26 +177,52 @@ class HudManager {
     }
     const runtime = this.runtime;
     if (!runtime) return;
+
     let created = false;
-    if (!this.window) {
+    let hudWindow = this.window;
+    if (!hudWindow) {
       const existing = await runtime.getByLabel(HUD_WINDOW_LABEL);
       if (generation !== this.generation) return;
-      this.window = existing ?? this.create(runtime);
-      created = true;
-      await this.window.setAlwaysOnTop(true);
-      // A HUD click must not activate the app. The HUD is still mouse
-      // interactive, but it never becomes the focused application window.
-      await this.window.setFocusable(false);
-      this.unlistenMoved = await this.window.onMoved(({ payload }) => writePosition(payload));
+      hudWindow = existing ?? this.create(runtime);
+      this.window = hudWindow;
+      created = existing === null;
+      if (created) {
+        const creation = this.waitForCreation(hudWindow);
+        this.pendingCreation = creation;
+        this.pendingWindow = hudWindow;
+        try {
+          await creation;
+        } catch (error) {
+          if (this.window === hudWindow) this.window = null;
+          throw error;
+        } finally {
+          if (this.pendingCreation === creation) {
+            this.pendingCreation = null;
+            this.pendingWindow = null;
+          }
+        }
+      }
+      if (generation !== this.generation || this.window !== hudWindow) return;
+      try {
+        await hudWindow.setAlwaysOnTop(true);
+        // A HUD click must not activate the app. The HUD is still mouse
+        // interactive, but it never becomes the focused application window.
+        await hudWindow.setFocusable(false);
+        this.unlistenMoved = await hudWindow.onMoved(({ payload }) => writePosition(payload));
+      } catch (error) {
+        if (this.window === hudWindow) await this.close();
+        throw error;
+      }
     }
-    if (generation !== this.generation || !this.window) return;
+
+    if (generation !== this.generation || this.window !== hudWindow) return;
     if (created) {
       try {
         // Refresh before and after showing. The first pass catches the newly
         // created hidden webview; the second catches the visible HUD. If either
         // pass fails, the HUD is not shown, avoiding a self-capture feedback loop.
         await screen.refreshFilter();
-        await this.window.show();
+        await hudWindow.show();
         await screen.refreshFilter();
       } catch (error) {
         await this.close();
@@ -215,8 +244,24 @@ class HudManager {
     const window = this.window;
     this.window = null;
     if (!window) return;
+    if (this.pendingWindow === window && this.pendingCreation) {
+      try {
+        await this.pendingCreation;
+      } catch {
+        return;
+      }
+    }
     if (window.destroy) await window.destroy();
     else await window.close();
+  }
+
+  private waitForCreation(window: HudWindow): Promise<void> {
+    return new Promise((resolve, reject) => {
+      void window.once("tauri://created", () => resolve()).catch(reject);
+      void window.once("tauri://error", ({ payload }) => {
+        reject(payload instanceof Error ? payload : new Error(String(payload)));
+      }).catch(reject);
+    });
   }
 
   private create(runtime: HudRuntime): HudWindow {

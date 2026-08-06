@@ -26,6 +26,7 @@ const STEPS = [
   ["check:camera-live", "a real camera session switches devices and survives a removal"],
   ["check:screen", "the screen source runs the whole live path on a synthetic desktop"],
   ["check:hud", "the screen HUD lifecycle and frozen teaching paths stay safe"],
+  ["check:hud-real", "a real macOS Tauri window creates and tears down the HUD"],
   ["check:overlay", "the multi label attention overlay paints what the model saw"],
   ["check:propose", "the annotator's guesses are only guesses until they are kept"],
   ["check:export", "an exported model runs outside Belo and agrees with it"],

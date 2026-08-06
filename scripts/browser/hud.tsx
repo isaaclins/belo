@@ -129,6 +129,10 @@ function makeRuntime() {
       async onFocusChanged() {
         return () => undefined;
       },
+      async once(event: string, handler: (event: { payload: unknown }) => void) {
+        if (event === "tauri://created") handler({ payload: null });
+        return () => undefined;
+      },
       async show() {
         metrics.shown += 1;
         if (record.focusable) metrics.focusThefts += 1;

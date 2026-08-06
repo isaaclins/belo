@@ -164,7 +164,7 @@ Yes. You can import pictures and use a single imported picture for a prediction.
 
 # Developer guide
 
-Current app version: **0.11.0**. Desktop, iOS and Android all build. The native screen feed and capture HUD are macOS-only; the existing web screen seam remains available where the webview provides it.
+Current app version: **0.11.1**. Desktop, iOS and Android all build. The native screen feed and capture HUD are macOS-only; the existing web screen seam remains available where the webview provides it.
 
 ## Detailed workflow
 
@@ -537,7 +537,7 @@ and live in `src/lib/hygiene.ts`, and every case is in `npm run check:store`.
 {
   "format": "belo-project",
   "formatVersion": 3,
-  "appVersion": "0.11.0",
+  "appVersion": "0.11.1",
   "name": "Shapes",
   "createdAt": "2026-07-27T14:00:00.000Z",
   "updatedAt": "2026-07-27T14:05:00.000Z",
@@ -838,8 +838,8 @@ Two workflows live in `.github/workflows`:
   and on a tag it creates the GitHub Release and uploads them. Asset names carry no
   version number, which is what lets the download links above stay the same forever.
 
-To cut a release: make sure `main` is green, then `git tag v0.11.0 && git push origin
-v0.11.0`. The version in `package.json`, `src-tauri/tauri.conf.json` and
+To cut a release: make sure `main` is green, then `git tag v0.11.1 && git push origin
+v0.11.1`. The version in `package.json`, `src-tauri/tauri.conf.json` and
 `src-tauri/Cargo.toml` should match the tag.
 
 Useful extras:
@@ -1291,7 +1291,7 @@ objects, the HUD stays closed instead of shipping a feedback loop.
 
 ### Screen-region shortcut
 
-Belo 0.11.0 keeps one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
+Belo 0.11.1 keeps one-shot screen captures on macOS. With a project open, **Cmd+Shift+B**
 registers only for that project, resolves Apple's `screencapture` executable at runtime,
 and invokes it with `-i -x` and a private temporary PNG path. **Esc** leaves no file and no
 manifest change. A completed region goes
@@ -1303,7 +1303,7 @@ window was backgrounded, the native notification names the project and its new c
 otherwise the normal Belo toast is used.
 
 The shortcut is unregistered before a project close can finish, and a callback that returns
-from the picker after close is discarded. Windows and Linux do not register it in 0.11.0:
+from the picker after close is discarded. Windows and Linux do not register it in 0.11.1:
 there is no clean background region-capture path there yet. Phones compile neither the
 shortcut nor notification plugin.
 
@@ -1346,6 +1346,14 @@ immediately and a refusal is reported as a refusal. The Rust side's own tests co
 stride handling, the JPEG encoding and the display fitting, and list the real displays
 through the actual bindings when the permission happens to be granted already, which is
 what proves the objc2 side links and answers.
+
+The native HUD lifecycle is also checked by `npm run check:hud-real`. It starts a hidden,
+unfocused Tauri app on a non-default Vite port, uses the real `WebviewWindow` API, and
+asserts the HUD's existence, 340 by 280 logical size, visibility, always-on-top state,
+frameless state, non-focus state and teardown. It leaves the browser harness in
+`npm run check:hud` unchanged. This check cannot judge pixels, drag feel, or whether the
+HUD visually avoids a user's content, so those still need a human eye in the smoke pass
+below.
 
 What none of that covers is ScreenCaptureKit itself. The native pipe has to be smoke tested
 by hand, and so does whatever ScreenCaptureKit costs while it runs:
