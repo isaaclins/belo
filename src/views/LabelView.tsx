@@ -432,8 +432,8 @@ export function LabelView() {
                     ? "Labels are the things Belo should find. Add one per kind of object, then draw a box around every one you see."
                     : "Labels are the classes your model learns. Two or more, with about 30 images each, is a good start."
                   : storage.mobile
-                    ? "Choose photos from this device, or hold the capture button to grab a burst from the camera."
-                    : "Drag in files or whole folders, import from disk, or hold the capture button to grab a burst from your webcam."
+                    ? "Choose photos from this device, or capture them here. Hold the shutter to grab a burst."
+                    : "Drag in files or whole folders, import from disk, or capture from your webcam. Hold the shutter to grab a burst."
               }
               action={
                 labels.length === 0 ? (
@@ -441,10 +441,28 @@ export function LabelView() {
                     <Plus size={16} weight="bold" /> Add a label
                   </button>
                 ) : (
-                  <button className="btn" onClick={() => void pickImages()}>
-                    <UploadSimple size={16} weight="bold" />
-                    {storage.mobile ? "Choose photos" : "Choose files"}
-                  </button>
+                  // The text above offers capture, so the button belongs here
+                  // rather than only in the toolbar above the grid.
+                  <div className="row">
+                    <button className="btn" onClick={() => void pickImages()}>
+                      <UploadSimple size={16} weight="bold" />
+                      {storage.mobile ? "Choose photos" : "Choose files"}
+                    </button>
+                    <button
+                      className="btn btn--primary"
+                      disabled={!activeLabel && !detect}
+                      title={
+                        activeLabel || detect
+                          ? storage.mobile
+                            ? "Capture from the camera"
+                            : "Capture from the webcam"
+                          : "Pick a label first"
+                      }
+                      onClick={() => setCapturing(true)}
+                    >
+                      <Camera size={16} weight="bold" /> Capture
+                    </button>
+                  </div>
                 )
               }
             />

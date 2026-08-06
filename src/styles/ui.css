@@ -643,6 +643,12 @@
   color: var(--ink-soft);
 }
 
+/* Two actions have to wrap rather than run off a narrow phone screen. */
+.empty .row {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
 /* ---------- Toast ---------- */
 .toasts {
   position: fixed;
